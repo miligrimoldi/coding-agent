@@ -30,7 +30,7 @@ def build_orchestrator() -> Orchestrator:
 
     orchestrator.register(
         "researcher",
-        Researcher(),
+        Researcher(tool_executor),
     )
 
     orchestrator.register(

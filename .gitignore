@@ -6,3 +6,4 @@ venv/
 *.egg-info/
 .DS_Store
 .idea/
+knowledge_base/chroma/
