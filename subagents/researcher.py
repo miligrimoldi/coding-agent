@@ -91,24 +91,15 @@ Formato:
             explorer_data=explorer_result.data,
         )
 
-        ecosystem = self._detect_ecosystem(
-            explorer_result.data
+        ecosystems = self._detect_ecosystems(
+            original_request=task_state.original_request,
+            explorer_data=explorer_result.data,
         )
 
-        rag_output = self.tool_executor.execute(
-            subagent="researcher",
-            tool_name="rag_search",
-            arguments={
-                "query": research_query,
-                "n_results": 5,
-                "ecosystem": ecosystem,
-            },
+        rag_data = self._search_rag(
+            query=research_query,
+            ecosystems=ecosystems,
             task_state=task_state,
-            allowed_tools=self.ALLOWED_TOOLS,
-        )
-
-        rag_data = self._parse_json_result(
-            rag_output
         )
 
         used_web_fallback = not rag_data.get(
@@ -142,14 +133,17 @@ Formato:
             used_web_fallback
         )
 
-        synthesized_data.setdefault(
-            "rag_sources",
-            self._extract_rag_sources(rag_data),
+        synthesized_data["ecosystems_searched"] = ecosystems
+        synthesized_data["missing_rag_evidence_for"] = (
+            rag_data.get("missing_evidence_for", [])
         )
 
-        synthesized_data.setdefault(
-            "web_sources",
-            web_data.get("results", []),
+        synthesized_data["rag_sources"] = (
+            self._extract_rag_sources(rag_data)
+        )
+
+        synthesized_data["web_sources"] = (
+            web_data.get("results", [])
         )
 
         task_state.record_iterations(
@@ -174,6 +168,118 @@ Formato:
             data=synthesized_data,
             sources=sources,
         )
+
+    def _search_rag(
+        self,
+        *,
+        query: str,
+        ecosystems: list[str],
+        task_state: TaskState,
+    ) -> dict:
+        """
+        Ejecuta una búsqueda RAG por cada ecosistema relevante y combina
+        los resultados.
+
+        Si no se detectó ningún ecosistema, realiza una búsqueda global.
+        """
+
+        ecosystems_to_search = ecosystems or [None]
+
+        results_by_ecosystem: dict = {}
+        combined_results: list[dict] = []
+        missing_evidence_for: list[str] = []
+
+        for ecosystem in ecosystems_to_search:
+            arguments = {
+                "query": query,
+                "n_results": 4,
+            }
+
+            if ecosystem is not None:
+                arguments["ecosystem"] = ecosystem
+
+            rag_output = self.tool_executor.execute(
+                subagent="researcher",
+                tool_name="rag_search",
+                arguments=arguments,
+                task_state=task_state,
+                allowed_tools=self.ALLOWED_TOOLS,
+            )
+
+            result = self._parse_json_result(
+                rag_output
+            )
+
+            ecosystem_key = ecosystem or "all"
+
+            results_by_ecosystem[ecosystem_key] = result
+
+            if not result.get(
+                "evidence_sufficient",
+                False,
+            ):
+                missing_evidence_for.append(
+                    ecosystem_key
+                )
+
+            combined_results.extend(
+                result.get("results", [])
+            )
+
+        # El mismo chunk podría aparecer en búsquedas diferentes.
+        unique_results: dict[str, dict] = {}
+
+        for result in combined_results:
+            chunk_id = result.get("chunk_id")
+
+            if not chunk_id:
+                continue
+
+            previous = unique_results.get(
+                chunk_id
+            )
+
+            if (
+                previous is None
+                or result.get("similarity", 0)
+                > previous.get("similarity", 0)
+            ):
+                unique_results[chunk_id] = result
+
+        ordered_results = sorted(
+            unique_results.values(),
+            key=lambda item: item.get(
+                "similarity",
+                0,
+            ),
+            reverse=True,
+        )
+
+        evidence_sufficient = (
+            len(missing_evidence_for) == 0
+            and len(ordered_results) > 0
+        )
+
+        return {
+            "query": query,
+            "ecosystems_searched": [
+                ecosystem or "all"
+                for ecosystem in ecosystems_to_search
+            ],
+            "results_by_ecosystem": (
+                results_by_ecosystem
+            ),
+            "results": ordered_results,
+            "result_count": len(
+                ordered_results
+            ),
+            "evidence_sufficient": (
+                evidence_sufficient
+            ),
+            "missing_evidence_for": (
+                missing_evidence_for
+            ),
+        }
 
     def _run_web_fallback(
         self,
@@ -315,15 +421,23 @@ Formato:
         )[:1200]
 
     @staticmethod
-    def _detect_ecosystem(
+    def _detect_ecosystems(
+        *,
+        original_request: str,
         explorer_data: dict,
-    ) -> Optional[str]:
+    ) -> list[str]:
+        """
+        Detecta todos los ecosistemas relevantes para la tarea.
+
+        No se limita al framework principal porque una misma funcionalidad
+        puede requerir documentación de NestJS, Prisma y Jest.
+        """
+
+        ecosystems: list[str] = []
+
         framework = str(
             explorer_data.get("framework", "")
         ).lower()
-
-        if "nest" in framework:
-            return "nestjs"
 
         dependencies = [
             str(dependency).lower()
@@ -333,13 +447,75 @@ Formato:
             )
         ]
 
-        if any(
-            "prisma" in dependency
-            for dependency in dependencies
-        ):
-            return "prisma"
+        relevant_files = [
+            str(path).lower()
+            for path in explorer_data.get(
+                "archivos_relevantes",
+                [],
+            )
+        ]
 
-        return None
+        request = original_request.lower()
+
+        # NestJS
+        if (
+            "nest" in framework
+            or any("@nestjs/" in dependency for dependency in dependencies)
+        ):
+            ecosystems.append("nestjs")
+
+        # Prisma
+        prisma_request_terms = (
+            "prisma",
+            "base de datos",
+            "persistencia",
+            "modelo",
+            "schema",
+            "migración",
+            "migracion",
+            "enum",
+            "filtro",
+            "where",
+        )
+
+        uses_prisma = (
+            any("prisma" in dependency for dependency in dependencies)
+            or any("schema.prisma" in path for path in relevant_files)
+        )
+
+        request_needs_prisma = any(
+            term in request
+            for term in prisma_request_terms
+        )
+
+        if uses_prisma and request_needs_prisma:
+            ecosystems.append("prisma")
+
+        # Jest
+        testing_terms = (
+            "test",
+            "tests",
+            "testing",
+            "prueba",
+            "pruebas",
+            "e2e",
+        )
+
+        uses_jest = any(
+            "jest" in dependency
+            for dependency in dependencies
+        )
+
+        request_needs_testing = any(
+            term in request
+            for term in testing_terms
+        )
+
+        if uses_jest and request_needs_testing:
+            ecosystems.append("jest")
+
+        # Evita duplicados manteniendo el orden.
+        return list(dict.fromkeys(ecosystems))
 
     @staticmethod
     def _extract_rag_sources(

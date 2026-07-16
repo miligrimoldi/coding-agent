@@ -11,7 +11,7 @@ SUPPORTED_EXTENSIONS = {
 }
 
 
-class DocumentLoader:
+class DocumentLoader: # Lee documentos originales y los convierte a source document
     def __init__(self, raw_documents_dir: Path):
         self.raw_documents_dir = raw_documents_dir.resolve()
 
