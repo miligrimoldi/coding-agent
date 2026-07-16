@@ -1,9 +1,9 @@
-
-# Uso: python3 main.py /ruta/al/repo "pedido en lenguaje natural"
-
 import sys
 
 from orchestrator import Orchestrator
+from policy_engine import PolicyEngine
+from tool_executor import ToolExecutor
+
 from subagents.explorer import Explorer
 from subagents.researcher import Researcher
 from subagents.implementer import Implementer
@@ -12,23 +12,66 @@ from subagents.reviewer import Reviewer
 
 
 def build_orchestrator() -> Orchestrator:
-    orch = Orchestrator()
-    orch.register("explorer", Explorer())
-    orch.register("researcher", Researcher())
-    orch.register("implementer", Implementer())
-    orch.register("tester", Tester())
-    orch.register("reviewer", Reviewer())
-    return orch
+    policy_engine = PolicyEngine.from_file(
+        "agent.config.yaml"
+    )
+
+    tool_executor = ToolExecutor(
+        policy_engine=policy_engine,
+        supervision_mode=True,
+    )
+
+    orchestrator = Orchestrator()
+
+    orchestrator.register(
+        "explorer",
+        Explorer(tool_executor),
+    )
+
+    orchestrator.register(
+        "researcher",
+        Researcher(),
+    )
+
+    orchestrator.register(
+        "implementer",
+        Implementer(),
+    )
+
+    orchestrator.register(
+        "tester",
+        Tester(tool_executor),
+    )
+
+    orchestrator.register(
+        "reviewer",
+        Reviewer(),
+    )
+
+    return orchestrator
 
 
 if __name__ == "__main__":
-    workspace = sys.argv[1] if len(sys.argv) > 1 else "."
+    workspace = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else "./target-project/issue-tracker-api"
+    )
+
     user_request = (
-        sys.argv[2] if len(sys.argv) > 2
-        else "Agregar una funcionalidad al proyecto y validar que los tests pasen."
+        sys.argv[2]
+        if len(sys.argv) > 2
+        else (
+            "Agregar una funcionalidad al proyecto "
+            "y validar que los tests pasen."
+        )
     )
 
     orchestrator = build_orchestrator()
-    final_state = orchestrator.run(user_request, workspace_path=workspace)
+
+    final_state = orchestrator.run(
+        user_request=user_request,
+        workspace_path=workspace,
+    )
 
     print(final_state.to_json())

@@ -37,6 +37,12 @@ def discover_tools() -> dict:
             continue  # el archivo no define una tool valida -- se ignora
         if not tool.enabled:
             continue
+
+        if tool.name in tools:
+            raise ValueError(
+                f"Hay más de una tool registrada con el nombre '{tool.name}'."
+            )
+
         tools[tool.name] = tool
 
     return tools
@@ -60,3 +66,13 @@ def get_implementations_for(names: list) -> dict:
     if unknown:
         raise ValueError(f"Tools desconocidas o deshabilitadas: {unknown}")
     return {name: ALL_TOOLS[name].execute for name in names}
+
+def get_tool(name: str) -> Tool:
+    """Devuelve la instancia completa de una tool registrada."""
+
+    if name not in ALL_TOOLS:
+        raise ValueError(
+            f"Tool desconocida o deshabilitada: '{name}'."
+        )
+
+    return ALL_TOOLS[name]

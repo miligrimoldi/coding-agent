@@ -1,0 +1,34 @@
+workspace: ./target-project/issue-tracker-api
+
+permissions:
+  read:
+    deny:
+      - ".env"
+      - "**/*.pem"
+      - "secrets/**"
+
+  write:
+    deny:
+      - ".env"
+      - ".github/**"
+      - "package-lock.json"
+      - "yarn.lock"
+      - "pnpm-lock.yaml"
+
+commands:
+  deny:
+    - "rm -rf"
+    - "git push"
+    - "git reset --hard"
+    - "prisma migrate reset"
+    - "sudo"
+    - "shutdown"
+
+  require_approval:
+    - "npm install"
+    - "npx prisma migrate dev"
+    - "git commit"
+
+approval:
+  categories:
+    - "write"
