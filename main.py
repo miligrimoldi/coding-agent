@@ -1,5 +1,6 @@
 import sys
 
+from observability import get_observability
 from orchestrator import Orchestrator
 from policy_engine import PolicyEngine
 from tool_executor import ToolExecutor
@@ -21,7 +22,9 @@ def build_orchestrator() -> Orchestrator:
         supervision_mode=True,
     )
 
-    orchestrator = Orchestrator(policy_engine=policy_engine)
+    orchestrator = Orchestrator(
+        policy_engine=policy_engine
+    )
 
     orchestrator.register(
         "explorer",
@@ -51,13 +54,16 @@ def build_orchestrator() -> Orchestrator:
     return orchestrator
 
 
-if __name__ == "__main__":
+def main() -> None:
+    # Primer argumento: ruta del repositorio sobre el que trabajará
+    # el coding agent.
     workspace = (
         sys.argv[1]
         if len(sys.argv) > 1
         else "./target-project/issue-tracker-api"
     )
 
+    # Segundo argumento: pedido que recibirá el orquestador.
     user_request = (
         sys.argv[2]
         if len(sys.argv) > 2
@@ -67,11 +73,21 @@ if __name__ == "__main__":
         )
     )
 
-    orchestrator = build_orchestrator()
+    try:
+        orchestrator = build_orchestrator()
 
-    final_state = orchestrator.run(
-        user_request=user_request,
-        workspace_path=workspace,
-    )
+        final_state = orchestrator.run(
+            user_request=user_request,
+            workspace_path=workspace,
+        )
 
-    print(final_state.to_json())
+        print(final_state.to_json())
+
+    finally:
+        # Fuerza el envío de las trazas pendientes antes de que
+        # termine el proceso, incluso si ocurre una excepción.
+        get_observability().flush()
+
+
+if __name__ == "__main__":
+    main()

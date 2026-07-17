@@ -243,15 +243,22 @@ def test_stops_when_same_error_repeats():
     orch = build_orchestrator(implementer, tester, reviewer)
     result = orch.run("pedido de prueba", workspace_path=".")
 
-    # Se corta apenas se detecta el segundo fallo idéntico -- no llega
-    # a agotar los 3 intentos.
+    # Se corta apenas se detecta el segundo fallo idéntico.
+    # No agota los 3 intentos ni ejecuta el Reviewer.
     assert implementer.calls == 2
     assert tester.calls == 2
-    assert reviewer.calls == 1
+    assert reviewer.calls == 0
+
     assert result.status == "needs_help"
-    assert any("Loop detectado" in line for line in result.progress_log)
+
     assert any(
-        "Loop de reintentos" in obs for obs in result.observations
+        "Loop detectado" in line
+        for line in result.progress_log
+    )
+
+    assert any(
+        "Loop de reintentos" in observation
+        for observation in result.observations
     )
 
 
