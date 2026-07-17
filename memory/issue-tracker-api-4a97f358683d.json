@@ -1,7 +1,7 @@
 {
   "workspace_path": "/Users/pilarsilveyra/faculty/coding-agent/target-project/issue-tracker-api",
   "created_at": "2026-07-17T19:26:06.526451+00:00",
-  "updated_at": "2026-07-17T20:13:39.280067+00:00",
+  "updated_at": "2026-07-17T20:33:16.081963+00:00",
   "architecture": {
     "lenguaje": "TypeScript",
     "framework": "NestJS",
@@ -56,6 +56,12 @@
       "description": "npm run lint",
       "resolved": false,
       "resolution": "Loop detectado: mismo error repetido sin cambios entre intentos; se pidió ayuda."
+    },
+    {
+      "timestamp": "2026-07-17T20:27:25.336272+00:00",
+      "description": "Pedido no resuelto por falta de evidencia o definiciones: No se ejecutaron modificaciones en el código; por lo tanto, la validación de título de máximo 120 caracteres y las pruebas asociadas no fueron implementadas.; Para completar la tarea, sería necesario editar src/tickets/dto/create-ticket.dto.ts para añadir @MaxLength(120) en la propiedad title junto con las validaciones existentes, y agregar pruebas unitarias en src/tickets/tickets.service.spec.ts (o un spec relacionado) que verifiquen que títulos de 120 caracteres son aceptados y títulos que superan 120 caracteres son rechazados.; Asegurar que ValidationPipe esté configurado globalmente (ya está configurado en src/main.ts).; No se registraron escrituras reales en el workspace.",
+      "resolved": false,
+      "resolution": ""
     }
   ],
   "session_summaries": [
@@ -81,6 +87,18 @@
       "timestamp": "2026-07-17T20:13:39.279888+00:00",
       "request": "Eliminar automáticamente los tickets viejos.",
       "status": "needs_help",
+      "files_modified": []
+    },
+    {
+      "timestamp": "2026-07-17T20:27:25.336298+00:00",
+      "request": "Agregar una validación para que el título de un ticket tenga como máximo 120 caracteres, manteniendo la validación mínima actual. Incluir tests unitarios que comprueben que un título válido es aceptado y que uno de más de 120 caracteres es rechazado.",
+      "status": "needs_help",
+      "files_modified": []
+    },
+    {
+      "timestamp": "2026-07-17T20:33:16.081659+00:00",
+      "request": "Agregar una validación para que el título de un ticket tenga como máximo 120 caracteres, manteniendo la validación mínima actual. Incluir tests unitarios que comprueben que un título válido es aceptado y que uno de más de 120 caracteres es rechazado.",
+      "status": "in_progress",
       "files_modified": []
     }
   ]

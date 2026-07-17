@@ -40,6 +40,9 @@ Reglas:
   actual toca archivos que la memoria no menciona.
 - Prestá especial atención a package.json, schema.prisma, módulos,
   controllers, services, DTOs y tests.
+- Si existe package.json, siempre debés leerlo antes de responder el JSON
+  final. No devuelvas scripts como "unknown" sin haber inspeccionado ese
+  archivo.
 - Cuando tengas suficiente evidencia, respondé con un único objeto JSON,
   sin texto alrededor, con esta forma:
   {
