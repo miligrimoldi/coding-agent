@@ -1,65 +1,135 @@
 import json
+import re
 from pathlib import Path
+from typing import Optional
 
 from llm_client import get_client, MODEL
+from request_mode import (
+    RequestMode,
+    detect_request_mode,
+)
 from task_state import TaskState, SubagentResult
 from tool_executor import ToolExecutor
 
 
+_REQUEST_TOKEN_PATTERN = re.compile(
+    r"[a-záéíóúüñ0-9_-]+"
+)
+
+
 class Researcher:
     ALLOWED_TOOLS = [
+        "read_file",
         "rag_search",
         "web_search",
     ]
 
-    SYSTEM_PROMPT = """
-Sos el subagente Researcher dentro de un sistema multiagente de
-desarrollo de código.
+    # El Researcher no vuelve a explorar todo el repositorio.
+    # Solo puede verificar puntualmente hasta tres archivos que
+    # ya fueron identificados por el Explorer.
+    MAX_VERIFICATION_FILES = 3
+    MAX_FILE_CONTENT_CHARS = 6000
 
-Tu responsabilidad es investigar cómo debería resolverse técnicamente
-el pedido del usuario.
+    OFFICIAL_DOMAINS_BY_ECOSYSTEM = {
+        "nestjs": [
+            "docs.nestjs.com",
+        ],
+        "prisma": [
+            "prisma.io",
+        ],
+        "jest": [
+            "jestjs.io",
+        ],
+    }
+
+    SYSTEM_PROMPT = """
+Sos el subagente Researcher dentro de un sistema multiagente de desarrollo
+de código.
+
+Tu responsabilidad es investigar y producir recomendaciones técnicas
+basadas en:
+- evidencia verificada por el Explorer;
+- verificaciones puntuales de archivos concretos;
+- documentación recuperada mediante RAG;
+- web oficial solamente cuando la evidencia anterior no alcanza.
+
+La exploración principal del repositorio corresponde al Explorer. No debés
+volver a explorar el proyecto desde cero.
 
 Recibís:
-- el pedido original;
-- los hallazgos del Explorer;
-- fragmentos recuperados del RAG;
-- eventualmente resultados web oficiales.
+- original_request;
+- task_mode: analysis o implementation;
+- explorer_findings;
+- repository_verifications;
+- rag_results;
+- eventualmente web_results.
 
-Reglas:
-- Basá tus recomendaciones en evidencia.
-- Diferenciá información del repositorio, RAG, web e inferencias.
-- No propongas modificar archivos que no fueron identificados o
-  justificados.
+Reglas generales:
+- Basá tus conclusiones en evidencia.
+- Diferenciá repositorio, memoria, RAG, web e inferencias.
 - No implementes código.
-- No inventes APIs, decorators, comandos ni convenciones.
-- Respondé con un único JSON sin texto alrededor.
-- Un finding técnico que recomiende una API, módulo, decorator o patrón
-  concreto debe incluir al menos un chunk_id o URL en evidence.
-- Si no podés respaldar una recomendación concreta con evidencia,
-  no la presentes como finding: agregala a risks_or_unknowns.
-- Si los chunks recuperados no cubren el tema central del pedido,
-  marcá evidence_sufficient=false para activar el fallback web.
-- Diferenciá evidencia técnica suficiente de requisitos funcionales claros.
-- evidence_sufficient indica si existe evidencia técnica para orientar una
-  solución.
-- requirements_clear indica si el pedido define suficientemente las
-  decisiones funcionales necesarias para implementar.
-- Para operaciones destructivas o automáticas, como eliminar datos, no
-  supongas períodos, frecuencias, políticas de retención ni borrado físico.
-- Si falta alguna de esas decisiones, marcá requirements_clear=false y
-  enumeralas en clarifications_needed.
+- No inventes APIs, decorators, archivos, comandos ni convenciones.
+- Una descripción del comportamiento actual puede citar paths verificados
+  del repositorio.
+- Una recomendación de API, decorator, módulo o patrón técnico debe incluir
+  un chunk_id o una URL en evidence.
+- Si una recomendación concreta no tiene respaldo, movela a inferences o
+  risks_or_unknowns.
+- El RAG debe consultarse antes que la web.
+- needs_web_fallback debe ser true solo cuando repositorio y RAG no alcanzan
+  para respaldar el tema técnico central.
+- No actives web únicamente porque existe una pregunta funcional abierta.
+- Respondé con un único objeto JSON sin texto alrededor.
+
+Para task_mode=analysis:
+- Describí primero la implementación actual.
+- Después presentá mejoras posibles.
+- Las decisiones necesarias para implementar una mejora futura no bloquean
+  el análisis.
+- requirements_clear debe ser true.
+- clarifications_needed debe ser una lista vacía.
+- Las preguntas abiertas deben ir en risks_or_unknowns.
+- No conviertas una recomendación hipotética en requisito obligatorio.
+
+Para task_mode=implementation:
+- evidence_sufficient indica si existe evidencia técnica suficiente para
+  orientar la implementación.
+- requirements_clear indica si están definidas las decisiones funcionales
+  necesarias para modificar el repositorio de forma segura.
+- Para operaciones destructivas o automáticas, no supongas períodos,
+  frecuencias, políticas de retención, cascadas, auditoría ni tipo de
+  borrado.
+- Si faltan decisiones funcionales necesarias, marcá
+  requirements_clear=false y enumeralas en clarifications_needed.
 
 Formato:
 {
+  "task_mode": "analysis|implementation",
   "evidence_sufficient": true,
   "requirements_clear": true,
   "clarifications_needed": [],
+  "needs_web_fallback": false,
   "used_web_fallback": false,
+  "current_implementation": [
+    {
+      "aspect": "...",
+      "description": "...",
+      "evidence": ["path del repositorio"]
+    }
+  ],
+  "suggested_improvements": [
+    {
+      "topic": "...",
+      "recommendation": "...",
+      "priority": "low|medium|high",
+      "evidence": ["path, chunk_id o URL"]
+    }
+  ],
   "findings": [
     {
       "topic": "...",
       "recommendation": "...",
-      "evidence": ["chunk_id o URL"]
+      "evidence": ["path, chunk_id o URL"]
     }
   ],
   "repository_context": [],
@@ -80,10 +150,14 @@ Formato:
         self,
         task_state: TaskState,
     ) -> SubagentResult:
-        task_state.set_phase("research")
+        task_state.set_phase(
+            "research"
+        )
 
-        explorer_result = task_state.last_result_of(
-            "explorer"
+        explorer_result = (
+            task_state.last_result_of(
+                "explorer"
+            )
         )
 
         if explorer_result is None:
@@ -92,24 +166,53 @@ Formato:
             return SubagentResult(
                 subagent="researcher",
                 summary=(
-                    "No se pudo investigar porque falta "
-                    "el resultado del Explorer."
+                    "No se pudo investigar porque "
+                    "falta el resultado del Explorer."
                 ),
                 data={
                     "evidence_sufficient": False,
-                    "reason": "missing_explorer_result",
+                    "requirements_clear": False,
+                    "clarifications_needed": [],
+                    "reason": (
+                        "missing_explorer_result"
+                    ),
                 },
                 sources=[],
             )
 
+        task_mode = detect_request_mode(
+            task_state.original_request
+        )
+
+        repository_verifications = (
+            self._verify_repository_context(
+                original_request=(
+                    task_state.original_request
+                ),
+                explorer_data=(
+                    explorer_result.data
+                ),
+                task_state=task_state,
+            )
+        )
+
         research_query = self._build_query(
-            original_request=task_state.original_request,
-            explorer_data=explorer_result.data,
+            original_request=(
+                task_state.original_request
+            ),
+            explorer_data=(
+                explorer_result.data
+            ),
+            task_mode=task_mode.value,
         )
 
         ecosystems = self._detect_ecosystems(
-            original_request=task_state.original_request,
-            explorer_data=explorer_result.data,
+            original_request=(
+                task_state.original_request
+            ),
+            explorer_data=(
+                explorer_result.data
+            ),
         )
 
         rag_data = self._search_rag(
@@ -118,83 +221,125 @@ Formato:
             task_state=task_state,
         )
 
-        # Primer control: evidencia numérica determinada por el Retriever.
-        used_web_fallback = not rag_data.get(
-            "evidence_sufficient",
-            False,
-        )
-
         web_data = {
             "results": [],
         }
 
-        if used_web_fallback:
-            web_data = self._run_web_fallback(
-                query=research_query,
-                task_state=task_state,
-            )
+        used_web_fallback = False
+        synthesis_iterations = 1
 
-        # Primera síntesis semántica.
         synthesized_data = self._synthesize(
             task_state=task_state,
-            explorer_data=explorer_result.data,
+            task_mode=task_mode.value,
+            explorer_data=(
+                explorer_result.data
+            ),
+            repository_verifications=(
+                repository_verifications
+            ),
             rag_data=rag_data,
             web_data=web_data,
-            used_web_fallback=used_web_fallback,
+            used_web_fallback=False,
         )
 
-        # Segundo control: aunque el Retriever haya superado el umbral,
-        # el LLM puede determinar que los chunks no responden realmente
-        # al pedido.
-        semantic_evidence_insufficient = not synthesized_data.get(
-            "evidence_sufficient",
-            False,
+        needs_web_fallback = bool(
+            synthesized_data.get(
+                "needs_web_fallback",
+                False,
+            )
+            or not synthesized_data.get(
+                "evidence_sufficient",
+                False,
+            )
         )
 
-        if (
-            semantic_evidence_insufficient
-            and not used_web_fallback
-        ):
+        if needs_web_fallback:
             used_web_fallback = True
+            synthesis_iterations += 1
 
             web_data = self._run_web_fallback(
                 query=research_query,
+                ecosystems=ecosystems,
                 task_state=task_state,
             )
 
-            # Vuelve a sintetizar utilizando RAG + resultados web.
             synthesized_data = self._synthesize(
                 task_state=task_state,
-                explorer_data=explorer_result.data,
+                task_mode=task_mode.value,
+                explorer_data=(
+                    explorer_result.data
+                ),
+                repository_verifications=(
+                    repository_verifications
+                ),
                 rag_data=rag_data,
                 web_data=web_data,
                 used_web_fallback=True,
             )
 
-        # Metadatos finales de la investigación.
-        synthesized_data["research_query"] = research_query
+        if task_mode == RequestMode.ANALYSIS:
+            synthesized_data = (
+                self._normalize_analysis_result(
+                    synthesized_data
+                )
+            )
+        else:
+            synthesized_data = (
+                self._normalize_implementation_result(
+                    synthesized_data
+                )
+            )
 
-        synthesized_data["used_web_fallback"] = (
-            used_web_fallback
+        synthesized_data["task_mode"] = (
+            task_mode.value
         )
 
-        synthesized_data["ecosystems_searched"] = ecosystems
+        synthesized_data[
+            "research_query"
+        ] = research_query
 
-        synthesized_data["missing_rag_evidence_for"] = (
-            rag_data.get("missing_evidence_for", [])
+        synthesized_data[
+            "used_web_fallback"
+        ] = used_web_fallback
+
+        synthesized_data[
+            "needs_web_fallback"
+        ] = False
+
+        synthesized_data[
+            "ecosystems_searched"
+        ] = ecosystems
+
+        synthesized_data[
+            "missing_rag_evidence_for"
+        ] = rag_data.get(
+            "missing_evidence_for",
+            [],
         )
 
         synthesized_data["rag_sources"] = (
-            self._extract_rag_sources(rag_data)
+            self._extract_rag_sources(
+                rag_data
+            )
         )
 
         synthesized_data["web_sources"] = (
-            web_data.get("results", [])
+            web_data.get(
+                "results",
+                [],
+            )
         )
+
+        synthesized_data[
+            "repository_files_verified"
+        ] = [
+            item["path"]
+            for item in repository_verifications
+        ]
 
         task_state.record_iterations(
             "researcher",
-            1,
+            synthesis_iterations,
         )
 
         sources = [
@@ -203,16 +348,225 @@ Formato:
         ]
 
         if used_web_fallback:
-            sources.append("web")
+            sources.append(
+                "web"
+            )
+
+        if task_mode == RequestMode.ANALYSIS:
+            summary_prefix = (
+                "Análisis técnico completado"
+            )
+        else:
+            summary_prefix = (
+                "Investigación técnica completada"
+            )
+
+        summary = (
+            f"{summary_prefix} con fallback web."
+            if used_web_fallback
+            else (
+                f"{summary_prefix} usando "
+                "repositorio y RAG."
+            )
+        )
 
         return SubagentResult(
             subagent="researcher",
-            summary=(
-                "Investigación técnica completada "
-                f"{'con fallback web' if used_web_fallback else 'usando el RAG'}."
-            ),
+            summary=summary,
             data=synthesized_data,
             sources=sources,
+        )
+
+    def _verify_repository_context(
+        self,
+        *,
+        original_request: str,
+        explorer_data: dict,
+        task_state: TaskState,
+    ) -> list[dict]:
+        """
+        Lee como máximo tres archivos concretos.
+
+        Solo considera paths identificados por el Explorer y que todavía
+        no fueron incluidos entre archivos_leidos.
+        """
+
+        relevant_files = explorer_data.get(
+            "archivos_relevantes",
+            [],
+        )
+
+        already_read = set(
+            explorer_data.get(
+                "archivos_leidos",
+                [],
+            )
+        )
+
+        if not isinstance(
+            relevant_files,
+            list,
+        ):
+            return []
+
+        request_tokens = {
+            token
+            for token in (
+                _REQUEST_TOKEN_PATTERN.findall(
+                    original_request.lower()
+                )
+            )
+            if len(token) >= 4
+        }
+
+        ranked_candidates: list[
+            tuple[int, int, str]
+        ] = []
+
+        seen: set[str] = set()
+
+        for index, raw_path in enumerate(
+            relevant_files
+        ):
+            if not isinstance(
+                raw_path,
+                str,
+            ):
+                continue
+
+            path = (
+                raw_path
+                .replace("\\", "/")
+                .strip()
+                .strip("/")
+            )
+
+            if (
+                not path
+                or path in seen
+                or path in already_read
+                or not self._is_readable_file(
+                    path
+                )
+            ):
+                continue
+
+            seen.add(path)
+
+            lower_path = path.lower()
+            filename = Path(
+                lower_path
+            ).name
+
+            score = 0
+
+            for token in request_tokens:
+                if token in lower_path:
+                    score += 4
+
+            if "controller" in filename:
+                score += 6
+
+            if "service" in filename:
+                score += 6
+
+            if "dto" in filename:
+                score += 6
+
+            if filename == "main.ts":
+                score += 5
+
+            if filename == "schema.prisma":
+                score += 6
+
+            if ".spec." in filename:
+                score += 4
+
+            ranked_candidates.append(
+                (
+                    -score,
+                    index,
+                    path,
+                )
+            )
+
+        ranked_candidates.sort()
+
+        verifications: list[dict] = []
+
+        for _, _, path in ranked_candidates[
+            :self.MAX_VERIFICATION_FILES
+        ]:
+            output = self.tool_executor.execute(
+                subagent="researcher",
+                tool_name="read_file",
+                arguments={
+                    "path": path,
+                },
+                task_state=task_state,
+                allowed_tools=self.ALLOWED_TOOLS,
+            )
+
+            output_text = str(output)
+
+            if output_text.startswith(
+                "Error"
+            ):
+                task_state.record_observation(
+                    "Researcher no pudo verificar "
+                    f"{path}: {output_text}"
+                )
+
+                continue
+
+            verifications.append({
+                "path": path,
+                "content": output_text[
+                    :self.MAX_FILE_CONTENT_CHARS
+                ],
+                "truncated": (
+                    len(output_text)
+                    > self.MAX_FILE_CONTENT_CHARS
+                ),
+            })
+
+        return verifications
+
+    @staticmethod
+    def _is_readable_file(
+        path: str,
+    ) -> bool:
+        lower_path = path.lower()
+
+        forbidden_parts = (
+            "node_modules/",
+            ".git/",
+            "dist/",
+            "coverage/",
+            "src/generated/",
+        )
+
+        if any(
+            part in lower_path
+            for part in forbidden_parts
+        ):
+            return False
+
+        valid_suffixes = (
+            ".ts",
+            ".tsx",
+            ".js",
+            ".jsx",
+            ".json",
+            ".prisma",
+            ".yaml",
+            ".yml",
+            ".md",
+            ".txt",
+        )
+
+        return lower_path.endswith(
+            valid_suffixes
         )
 
     def _search_rag(
@@ -222,14 +576,9 @@ Formato:
         ecosystems: list[str],
         task_state: TaskState,
     ) -> dict:
-        """
-        Ejecuta una búsqueda RAG por cada ecosistema relevante y combina
-        los resultados.
-
-        Si no se detectó ningún ecosistema, realiza una búsqueda global.
-        """
-
-        ecosystems_to_search = ecosystems or [None]
+        ecosystems_to_search = (
+            ecosystems or [None]
+        )
 
         results_by_ecosystem: dict = {}
         combined_results: list[dict] = []
@@ -242,41 +591,51 @@ Formato:
             }
 
             if ecosystem is not None:
-                arguments["ecosystem"] = ecosystem
+                arguments[
+                    "ecosystem"
+                ] = ecosystem
 
-            rag_output = self.tool_executor.execute(
-                subagent="researcher",
-                tool_name="rag_search",
-                arguments=arguments,
-                task_state=task_state,
-                allowed_tools=self.ALLOWED_TOOLS,
+            rag_output = (
+                self.tool_executor.execute(
+                    subagent="researcher",
+                    tool_name="rag_search",
+                    arguments=arguments,
+                    task_state=task_state,
+                    allowed_tools=(
+                        self.ALLOWED_TOOLS
+                    ),
+                )
             )
 
             result = self._parse_json_result(
-                rag_output
+                str(rag_output)
             )
 
-            ecosystem_key = ecosystem or "all"
+            key = ecosystem or "all"
 
-            results_by_ecosystem[ecosystem_key] = result
+            results_by_ecosystem[key] = result
 
             if not result.get(
                 "evidence_sufficient",
                 False,
             ):
                 missing_evidence_for.append(
-                    ecosystem_key
+                    key
                 )
 
             combined_results.extend(
-                result.get("results", [])
+                result.get(
+                    "results",
+                    [],
+                )
             )
 
-        # Evita conservar el mismo chunk varias veces.
         unique_results: dict[str, dict] = {}
 
         for result in combined_results:
-            chunk_id = result.get("chunk_id")
+            chunk_id = result.get(
+                "chunk_id"
+            )
 
             if not chunk_id:
                 continue
@@ -287,10 +646,18 @@ Formato:
 
             if (
                 previous is None
-                or result.get("similarity", 0)
-                > previous.get("similarity", 0)
+                or result.get(
+                    "similarity",
+                    0,
+                )
+                > previous.get(
+                    "similarity",
+                    0,
+                )
             ):
-                unique_results[chunk_id] = result
+                unique_results[
+                    chunk_id
+                ] = result
 
         ordered_results = sorted(
             unique_results.values(),
@@ -301,17 +668,20 @@ Formato:
             reverse=True,
         )
 
-        evidence_sufficient = (
-            len(missing_evidence_for) == 0
-            and len(ordered_results) > 0
+        # No se considera insuficiente todo el RAG únicamente porque
+        # falte evidencia para un ecosistema secundario.
+        evidence_sufficient = any(
+            result.get(
+                "evidence_sufficient",
+                False,
+            )
+            for result in (
+                results_by_ecosystem.values()
+            )
         )
 
         return {
             "query": query,
-            "ecosystems_searched": [
-                ecosystem or "all"
-                for ecosystem in ecosystems_to_search
-            ],
             "results_by_ecosystem": (
                 results_by_ecosystem
             ),
@@ -331,30 +701,54 @@ Formato:
         self,
         *,
         query: str,
+        ecosystems: list[str],
         task_state: TaskState,
     ) -> dict:
+        domains: list[str] = []
+
+        for ecosystem in ecosystems:
+            domains.extend(
+                self.OFFICIAL_DOMAINS_BY_ECOSYSTEM.get(
+                    ecosystem,
+                    [],
+                )
+            )
+
+        domains = list(
+            dict.fromkeys(
+                domains
+            )
+        )
+
+        if not domains:
+            domains = [
+                "docs.nestjs.com",
+                "prisma.io",
+                "jestjs.io",
+            ]
+
         output = self.tool_executor.execute(
             subagent="researcher",
             tool_name="web_search",
             arguments={
                 "query": query,
-                "domains": [
-                    "docs.nestjs.com",
-                    "prisma.io",
-                    "jestjs.io",
-                ],
+                "domains": domains,
             },
             task_state=task_state,
             allowed_tools=self.ALLOWED_TOOLS,
         )
 
-        return self._parse_json_result(output)
+        return self._parse_json_result(
+            str(output)
+        )
 
     def _synthesize(
         self,
         *,
         task_state: TaskState,
+        task_mode: str,
         explorer_data: dict,
+        repository_verifications: list[dict],
         rag_data: dict,
         web_data: dict,
         used_web_fallback: bool,
@@ -365,67 +759,196 @@ Formato:
             "original_request": (
                 task_state.original_request
             ),
-            "repository_context": explorer_data,
+            "task_mode": task_mode,
+            "explorer_findings": (
+                explorer_data
+            ),
+            "repository_verifications": (
+                repository_verifications
+            ),
             "rag_results": rag_data,
             "web_results": web_data,
-            "used_web_fallback": used_web_fallback,
+            "used_web_fallback": (
+                used_web_fallback
+            ),
         }
 
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": self.SYSTEM_PROMPT,
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        context,
-                        ensure_ascii=False,
-                    ),
-                },
-            ],
+        response = (
+            client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            self.SYSTEM_PROMPT
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            context,
+                            ensure_ascii=False,
+                        ),
+                    },
+                ],
+            )
         )
 
-        content = response.choices[0].message.content
+        content = (
+            response.choices[0].message.content
+        )
 
         try:
-            return json.loads(content)
-        except (json.JSONDecodeError, TypeError):
+            parsed = json.loads(
+                content or ""
+            )
+
+            if isinstance(parsed, dict):
+                return parsed
+
+            raise TypeError(
+                "La salida no es un objeto."
+            )
+
+        except (
+            json.JSONDecodeError,
+            TypeError,
+        ):
             task_state.record_observation(
-                "Researcher no devolvió JSON válido; "
-                "se guardó la respuesta como texto libre."
+                "Researcher no devolvió JSON "
+                "válido; se guardó como texto libre."
             )
 
             return {
+                "task_mode": task_mode,
                 "evidence_sufficient": False,
-                "used_web_fallback": (
-                    used_web_fallback
+                "requirements_clear": (
+                    task_mode == "analysis"
+                ),
+                "clarifications_needed": [],
+                "needs_web_fallback": (
+                    not used_web_fallback
                 ),
                 "resumen_libre": content,
+                "current_implementation": [],
+                "suggested_improvements": [],
                 "findings": [],
                 "repository_context": [],
-                "rag_sources": (
-                    self._extract_rag_sources(
-                        rag_data
-                    )
-                ),
-                "web_sources": web_data.get(
-                    "results",
-                    [],
-                ),
                 "inferences": [],
                 "risks_or_unknowns": [
-                    "La salida no respetó el formato JSON."
+                    "La salida no respetó el "
+                    "formato JSON esperado."
                 ],
             }
+
+    @staticmethod
+    def _normalize_analysis_result(
+        data: dict,
+    ) -> dict:
+        if not isinstance(data, dict):
+            data = {}
+
+        clarifications = data.get(
+            "clarifications_needed",
+            [],
+        )
+
+        if not isinstance(
+            clarifications,
+            list,
+        ):
+            clarifications = []
+
+        risks = data.get(
+            "risks_or_unknowns",
+            [],
+        )
+
+        if not isinstance(risks, list):
+            risks = []
+
+        for clarification in clarifications:
+            if not clarification:
+                continue
+
+            text = (
+                "Pregunta abierta no bloqueante "
+                "para una futura implementación: "
+                f"{clarification}"
+            )
+
+            if text not in risks:
+                risks.append(text)
+
+        data["task_mode"] = "analysis"
+        data["requirements_clear"] = True
+        data["clarifications_needed"] = []
+        data["risks_or_unknowns"] = risks
+
+        Researcher._normalize_lists(data)
+
+        return data
+
+    @staticmethod
+    def _normalize_implementation_result(
+        data: dict,
+    ) -> dict:
+        if not isinstance(data, dict):
+            data = {}
+
+        data["task_mode"] = (
+            "implementation"
+        )
+
+        if not isinstance(
+            data.get(
+                "clarifications_needed"
+            ),
+            list,
+        ):
+            data[
+                "clarifications_needed"
+            ] = []
+
+        if not isinstance(
+            data.get(
+                "risks_or_unknowns"
+            ),
+            list,
+        ):
+            data[
+                "risks_or_unknowns"
+            ] = []
+
+        Researcher._normalize_lists(data)
+
+        return data
+
+    @staticmethod
+    def _normalize_lists(
+        data: dict,
+    ) -> None:
+        for field_name in (
+            "current_implementation",
+            "suggested_improvements",
+            "findings",
+            "repository_context",
+            "rag_sources",
+            "web_sources",
+            "inferences",
+        ):
+            if not isinstance(
+                data.get(field_name),
+                list,
+            ):
+                data[field_name] = []
 
     @staticmethod
     def _build_query(
         *,
         original_request: str,
         explorer_data: dict,
+        task_mode: str,
     ) -> str:
         language = explorer_data.get(
             "lenguaje",
@@ -447,16 +970,33 @@ Formato:
             [],
         )
 
+        if not isinstance(
+            dependencies,
+            list,
+        ):
+            dependencies = []
+
+        if not isinstance(
+            relevant_files,
+            list,
+        ):
+            relevant_files = []
+
         file_names = [
             Path(path).name
-            for path in relevant_files[:8]
+            for path in relevant_files[:10]
+            if isinstance(path, str)
         ]
 
         query_parts = [
             original_request,
-            language,
-            framework,
-            " ".join(dependencies[:10]),
+            f"task mode: {task_mode}",
+            str(language),
+            str(framework),
+            " ".join(
+                str(item)
+                for item in dependencies[:12]
+            ),
             " ".join(file_names),
         ]
 
@@ -464,7 +1004,7 @@ Formato:
             part
             for part in query_parts
             if part
-        )[:1200]
+        )[:1400]
 
     @staticmethod
     def _detect_ecosystems(
@@ -472,14 +1012,13 @@ Formato:
         original_request: str,
         explorer_data: dict,
     ) -> list[str]:
-        """
-        Detecta todos los ecosistemas relevantes para la tarea.
-        """
-
         ecosystems: list[str] = []
 
         framework = str(
-            explorer_data.get("framework", "")
+            explorer_data.get(
+                "framework",
+                "",
+            )
         ).lower()
 
         dependencies = [
@@ -498,9 +1037,10 @@ Formato:
             )
         ]
 
-        request = original_request.lower()
+        request = (
+            original_request.lower()
+        )
 
-        # NestJS
         if (
             "nest" in framework
             or any(
@@ -508,13 +1048,30 @@ Formato:
                 for dependency in dependencies
             )
         ):
-            ecosystems.append("nestjs")
+            ecosystems.append(
+                "nestjs"
+            )
 
-        # Prisma
-        prisma_request_terms = (
+        uses_prisma = bool(
+            any(
+                "prisma" in dependency
+                for dependency in dependencies
+            )
+            or any(
+                "schema.prisma" in path
+                or "/prisma/" in path
+                for path in relevant_files
+            )
+        )
+
+        prisma_terms = (
             "prisma",
             "base de datos",
             "persistencia",
+            "persistir",
+            "guardar",
+            "creación de ticket",
+            "creacion de ticket",
             "modelo",
             "schema",
             "migración",
@@ -525,35 +1082,28 @@ Formato:
             "eliminar",
             "borrar",
             "delete",
-            "deletemany",
             "retención",
             "retencion",
             "viejo",
             "viejos",
-            "antiguo",
-            "antiguos",
         )
 
-        uses_prisma = (
-            any(
-                "prisma" in dependency
-                for dependency in dependencies
+        if (
+            uses_prisma
+            and any(
+                term in request
+                for term in prisma_terms
             )
-            or any(
-                "schema.prisma" in path
-                for path in relevant_files
+        ):
+            ecosystems.append(
+                "prisma"
             )
+
+        uses_jest = any(
+            "jest" in dependency
+            for dependency in dependencies
         )
 
-        request_needs_prisma = any(
-            term in request
-            for term in prisma_request_terms
-        )
-
-        if uses_prisma and request_needs_prisma:
-            ecosystems.append("prisma")
-
-        # Jest
         testing_terms = (
             "test",
             "tests",
@@ -561,22 +1111,25 @@ Formato:
             "prueba",
             "pruebas",
             "e2e",
+            "spec",
         )
 
-        uses_jest = any(
-            "jest" in dependency
-            for dependency in dependencies
+        if (
+            uses_jest
+            and any(
+                term in request
+                for term in testing_terms
+            )
+        ):
+            ecosystems.append(
+                "jest"
+            )
+
+        return list(
+            dict.fromkeys(
+                ecosystems
+            )
         )
-
-        request_needs_testing = any(
-            term in request
-            for term in testing_terms
-        )
-
-        if uses_jest and request_needs_testing:
-            ecosystems.append("jest")
-
-        return list(dict.fromkeys(ecosystems))
 
     @staticmethod
     def _extract_rag_sources(
@@ -592,6 +1145,12 @@ Formato:
                 "metadata",
                 {},
             )
+
+            if not isinstance(
+                metadata,
+                dict,
+            ):
+                metadata = {}
 
             sources.append({
                 "chunk_id": result.get(
@@ -630,7 +1189,8 @@ Formato:
                 "results": [],
                 "evidence_sufficient": False,
                 "error": (
-                    "La tool no devolvió un objeto JSON."
+                    "La tool no devolvió un "
+                    "objeto JSON."
                 ),
             }
 

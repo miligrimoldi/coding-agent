@@ -3,13 +3,37 @@ import re
 from pathlib import Path
 from typing import Optional
 
-from policy_engine import PolicyEngine, PolicyViolation
+from observability import get_observability
+from policy_engine import (
+    PolicyEngine,
+    PolicyViolation,
+)
 from project_memory import ProjectMemory
-from task_state import TaskState, SubagentResult
-from subagents.subagent_protocol import Subagent
+from request_mode import (
+    RequestMode,
+    detect_request_mode,
+)
+from task_state import (
+    TaskState,
+    SubagentResult,
+)
+from subagents.subagent_protocol import (
+    Subagent,
+)
 
 
-_DIGITS_PATTERN = re.compile(r"\d+")
+_DIGITS_PATTERN = re.compile(
+    r"\d+"
+)
+
+
+_SUBAGENT_PHASES = {
+    "explorer": "exploration",
+    "researcher": "research",
+    "implementer": "implementation",
+    "tester": "testing",
+    "reviewer": "review",
+}
 
 
 class SubagentError(Exception):
@@ -17,19 +41,22 @@ class SubagentError(Exception):
 
 
 class Orchestrator:
-    # Intentos totales del ciclo implementer -> tester:
-    # un intento inicial y hasta dos reintentos.
     MAX_IMPLEMENT_ATTEMPTS = 3
 
     def __init__(
         self,
-        policy_engine: Optional[PolicyEngine] = None,
+        policy_engine: Optional[
+            PolicyEngine
+        ] = None,
     ):
-        self.subagents: dict[str, Subagent] = {}
+        self.subagents: dict[
+            str,
+            Subagent,
+        ] = {}
 
-        # Es opcional porque algunos tests unitarios pueden usar
-        # subagentes falsos sin necesidad de cargar políticas.
-        self.policy_engine = policy_engine
+        self.policy_engine = (
+            policy_engine
+        )
 
     def register(
         self,
@@ -43,62 +70,112 @@ class Orchestrator:
         name: str,
         task_state: TaskState,
     ) -> SubagentResult:
+        """
+        Ejecuta un subagente dentro de una observación Langfuse.
+
+        Las generaciones OpenAI y las tools ejecutadas por ese
+        subagente quedan automáticamente anidadas dentro del span.
+        """
+
         if name not in self.subagents:
             raise SubagentError(
-                f"Subagente '{name}' no está registrado."
+                f"Subagente '{name}' no está "
+                "registrado."
             )
 
-        task_state.log(f"Llamando a subagente: {name}")
+        task_state.log(
+            f"Llamando a subagente: {name}"
+        )
 
-        try:
-            result = self.subagents[name].run(task_state)
-        except Exception as exc:
-            task_state.record_observation(
-                f"Falló el subagente {name}: {exc}"
+        request_mode = (
+            detect_request_mode(
+                task_state.original_request
+            ).value
+        )
+
+        phase = _SUBAGENT_PHASES.get(
+            name,
+            name,
+        )
+
+        observability = (
+            get_observability()
+        )
+
+        with observability.subagent_span(
+            subagent=name,
+            phase=phase,
+            request_mode=request_mode,
+        ) as subagent_observation:
+            try:
+                result = self.subagents[
+                    name
+                ].run(task_state)
+
+            except Exception as exc:
+                task_state.record_observation(
+                    f"Falló el subagente "
+                    f"{name}: {exc}"
+                )
+
+                raise SubagentError(
+                    f"El subagente {name} "
+                    f"falló: {exc}"
+                ) from exc
+
+            task_state.record_subagent_result(
+                result
             )
 
-            raise SubagentError(
-                f"El subagente {name} falló: {exc}"
-            ) from exc
+            subagent_observation.update(
+                output=(
+                    observability
+                    .build_subagent_output(
+                        result=result,
+                        task_state=task_state,
+                    )
+                ),
+                metadata={
+                    "subagent": name,
+                    "phase": phase,
+                    "requestmode": (
+                        request_mode
+                    ),
+                    "status": (
+                        task_state.status
+                    ),
+                },
+            )
 
-        task_state.record_subagent_result(result)
-        return result
+            return result
 
     def _try_call(
         self,
         task_state: TaskState,
         step: str,
     ) -> bool:
-        """
-        Llama a un subagente.
-
-        Si el subagente falla con una excepción, marca la tarea como
-        bloqueada y devuelve False para indicar que hay que detener
-        el pipeline.
-        """
-
         try:
-            self.call_subagent(step, task_state)
+            self.call_subagent(
+                step,
+                task_state,
+            )
+
             return True
+
         except SubagentError as exc:
             task_state.status = "blocked"
+
             task_state.log(
-                f"Tarea bloqueada en el paso '{step}': {exc}"
+                "Tarea bloqueada en el paso "
+                f"'{step}': {exc}"
             )
+
             return False
 
     @staticmethod
     def _fingerprint_failures(
         failing_checks: list[dict],
     ) -> Optional[str]:
-        """
-        Genera una huella de los errores del Tester.
-
-        Normaliza números que pueden cambiar entre ejecuciones, como
-        tiempos o números de línea, para detectar si dos intentos
-        consecutivos fallaron esencialmente de la misma manera.
-        """
-
         if not failing_checks:
             return None
 
@@ -106,12 +183,19 @@ class Orchestrator:
 
         for check in sorted(
             failing_checks,
-            key=lambda item: item["command"],
+            key=lambda item: item[
+                "command"
+            ],
         ):
-            normalized_stderr = _DIGITS_PATTERN.sub(
-                "#",
-                check.get("stderr", ""),
-            )[:300]
+            normalized_stderr = (
+                _DIGITS_PATTERN.sub(
+                    "#",
+                    check.get(
+                        "stderr",
+                        "",
+                    ),
+                )[:300]
+            )
 
             parts.append(
                 f"{check['command']}|"
@@ -120,97 +204,106 @@ class Orchestrator:
             )
 
         return hashlib.sha256(
-            "\n".join(parts).encode("utf-8")
+            "\n".join(
+                parts
+            ).encode("utf-8")
         ).hexdigest()
 
     def _run_implement_and_test_cycle(
         self,
         task_state: TaskState,
     ) -> bool:
-        """
-        Ejecuta el ciclo Implementer -> Tester.
+        memory = (
+            task_state.project_memory
+        )
 
-        Si el Tester falla, vuelve a llamar al Implementer para que
-        corrija usando como contexto los errores de la validación
-        anterior.
+        failed_commands_history: list[
+            str
+        ] = []
 
-        Si el Implementer declara que no tiene evidencia suficiente y
-        no modificó archivos, la tarea queda en needs_help y el Tester
-        no se ejecuta.
-
-        Si dos intentos consecutivos fallan con el mismo error, se
-        detecta un ciclo sin progreso y la tarea queda en needs_help.
-
-        También actualiza la memoria con comandos validados y bugs
-        investigados. La decisión exitosa se guarda más adelante,
-        después de que el Reviewer aprueba los cambios.
-
-        Devuelve False solamente cuando un subagente falla con una
-        excepción. En los demás casos devuelve True.
-        """
-
-        memory = task_state.project_memory
-        failed_commands_history: list[str] = []
-        previous_fingerprint: Optional[str] = None
+        previous_fingerprint: Optional[
+            str
+        ] = None
 
         for attempt in range(
             1,
-            self.MAX_IMPLEMENT_ATTEMPTS + 1,
+            self.MAX_IMPLEMENT_ATTEMPTS
+            + 1,
         ):
+            task_state.log(
+                "Intento de implementación: "
+                f"{attempt}/"
+                f"{self.MAX_IMPLEMENT_ATTEMPTS}"
+            )
+
             if not self._try_call(
                 task_state,
                 "implementer",
             ):
                 return False
 
-            implementer_result = task_state.last_result_of(
-                "implementer"
+            implementer_result = (
+                task_state.last_result_of(
+                    "implementer"
+                )
             )
 
             implementer_declined = bool(
                 implementer_result
                 and implementer_result.data.get(
                     "evidence_sufficient"
-                ) is False
+                )
+                is False
                 and not task_state.files_modified
             )
 
-            # Si el Implementer no pudo actuar, no tiene sentido
-            # ejecutar el Tester ni iniciar nuevos intentos.
             if implementer_declined:
-                risks_or_notes = implementer_result.data.get(
-                    "risks_or_notes",
-                    [],
+                risks_or_notes = (
+                    implementer_result.data.get(
+                        "risks_or_notes",
+                        [],
+                    )
                 )
 
-                if not isinstance(risks_or_notes, list):
+                if not isinstance(
+                    risks_or_notes,
+                    list,
+                ):
                     risks_or_notes = []
 
                 reasons = "; ".join(
                     str(note)
-                    for note in risks_or_notes
-                ) or implementer_result.data.get(
-                    "summary",
-                    "",
+                    for note
+                    in risks_or_notes
+                ) or (
+                    implementer_result.data.get(
+                        "summary",
+                        "",
+                    )
                 )
 
-                task_state.status = "needs_help"
+                task_state.status = (
+                    "needs_help"
+                )
 
                 task_state.log(
-                    "El Implementer no encontró evidencia suficiente "
-                    "para aplicar el pedido de forma segura y no "
-                    "modificó ningún archivo."
+                    "El Implementer no encontró "
+                    "evidencia suficiente para "
+                    "aplicar el pedido de forma "
+                    "segura y no modificó archivos."
                 )
 
                 task_state.record_observation(
-                    f"Implementer declinó actuar: {reasons}"
+                    "Implementer declinó actuar: "
+                    f"{reasons}"
                 )
 
                 if memory:
                     memory.record_bug(
                         description=(
-                            "Pedido no resuelto por falta de "
-                            f"evidencia o definiciones: {reasons}"
+                            "Pedido no resuelto por "
+                            "falta de evidencia o "
+                            f"definiciones: {reasons}"
                         ),
                         resolved=False,
                         resolution="",
@@ -224,26 +317,47 @@ class Orchestrator:
             ):
                 return False
 
-            tester_result = task_state.last_result_of(
-                "tester"
+            tester_result = (
+                task_state.last_result_of(
+                    "tester"
+                )
             )
 
-            validated_commands = tester_result.data.get(
-                "validated_commands",
-                {},
+            if tester_result is None:
+                task_state.status = (
+                    "blocked"
+                )
+
+                task_state.log(
+                    "No existe resultado del "
+                    "Tester."
+                )
+
+                return True
+
+            validated_commands = (
+                tester_result.data.get(
+                    "validated_commands",
+                    {},
+                )
             )
 
-            if memory and validated_commands:
+            if (
+                memory
+                and validated_commands
+            ):
                 memory.update_useful_commands(
                     validated_commands
                 )
 
-            # Si todas las validaciones pasaron, termina el ciclo.
             if tester_result.data.get(
                 "all_passed",
                 False,
             ):
-                if memory and failed_commands_history:
+                if (
+                    memory
+                    and failed_commands_history
+                ):
                     memory.record_bug(
                         description="; ".join(
                             dict.fromkeys(
@@ -252,7 +366,8 @@ class Orchestrator:
                         ),
                         resolved=True,
                         resolution=(
-                            f"Resuelto en el intento {attempt}."
+                            "Resuelto en el intento "
+                            f"{attempt}."
                         ),
                     )
 
@@ -260,49 +375,64 @@ class Orchestrator:
 
             failing_checks = [
                 check
-                for check in tester_result.data.get(
+                for check
+                in tester_result.data.get(
                     "checks",
                     [],
                 )
-                if not check.get("ok", False)
+                if not check.get(
+                    "ok",
+                    False,
+                )
             ]
 
             failed_commands_history.extend(
                 check["command"]
-                for check in failing_checks
+                for check
+                in failing_checks
+                if "command" in check
             )
 
-            fingerprint = self._fingerprint_failures(
-                failing_checks
+            fingerprint = (
+                self._fingerprint_failures(
+                    failing_checks
+                )
             )
 
-            # Si el error es igual al del intento anterior, se corta
-            # para evitar reintentos sin progreso.
             if (
                 fingerprint is not None
-                and fingerprint == previous_fingerprint
+                and fingerprint
+                == previous_fingerprint
             ):
-                task_state.status = "needs_help"
-
-                task_state.log(
-                    "Loop detectado: el Tester volvió a fallar "
-                    "exactamente igual que en el intento anterior "
-                    f"(intento {attempt}). El Implementer no está "
-                    "progresando."
+                task_state.status = (
+                    "needs_help"
                 )
 
-                failing_command_names = ", ".join(
+                task_state.log(
+                    "Loop detectado: el Tester "
+                    "volvió a fallar igual que "
+                    "en el intento anterior "
+                    f"(intento {attempt})."
+                )
+
+                command_names = ", ".join(
                     dict.fromkeys(
-                        check["command"]
-                        for check in failing_checks
+                        check.get(
+                            "command",
+                            "",
+                        )
+                        for check
+                        in failing_checks
+                        if check.get(
+                            "command"
+                        )
                     )
                 )
 
                 task_state.record_observation(
-                    "Loop de reintentos sin avance: los comandos "
-                    f"'{failing_command_names}' siguen fallando con "
-                    "el mismo error. Hace falta intervención humana "
-                    "para diagnosticar la causa."
+                    "Loop de reintentos sin "
+                    "avance. Comandos: "
+                    f"{command_names}"
                 )
 
                 if memory:
@@ -314,23 +444,30 @@ class Orchestrator:
                         ),
                         resolved=False,
                         resolution=(
-                            "Loop detectado: mismo error repetido "
-                            "sin progreso entre intentos."
+                            "Loop detectado: mismo "
+                            "error repetido sin "
+                            "progreso."
                         ),
                     )
 
                 return True
 
-            previous_fingerprint = fingerprint
+            previous_fingerprint = (
+                fingerprint
+            )
 
-            if attempt < self.MAX_IMPLEMENT_ATTEMPTS:
+            if (
+                attempt
+                < self.MAX_IMPLEMENT_ATTEMPTS
+            ):
                 task_state.log(
-                    f"El Tester falló en el intento {attempt}/"
-                    f"{self.MAX_IMPLEMENT_ATTEMPTS}; se vuelve a "
-                    "llamar al Implementer para que corrija."
+                    "El Tester falló en el "
+                    f"intento {attempt}/"
+                    f"{self.MAX_IMPLEMENT_ATTEMPTS}; "
+                    "se vuelve a llamar al "
+                    "Implementer."
                 )
 
-        # Se agotaron todos los intentos sin resolver los errores.
         if memory:
             memory.record_bug(
                 description="; ".join(
@@ -343,8 +480,9 @@ class Orchestrator:
             )
 
         task_state.log(
-            "Las validaciones del Tester siguieron fallando "
-            f"después de {self.MAX_IMPLEMENT_ATTEMPTS} "
+            "Las validaciones siguieron "
+            "fallando después de "
+            f"{self.MAX_IMPLEMENT_ATTEMPTS} "
             "intento(s)."
         )
 
@@ -354,45 +492,105 @@ class Orchestrator:
         self,
         task_state: TaskState,
     ) -> None:
-        for step in (
-            "explorer",
-            "researcher",
-        ):
-            if not self._try_call(
-                task_state,
-                step,
-            ):
-                return
-
-        explorer_result = task_state.last_result_of(
-            "explorer"
+        request_mode = (
+            detect_request_mode(
+                task_state.original_request
+            )
         )
 
-        if explorer_result and task_state.project_memory:
+        task_state.log(
+            "Modo de tarea detectado: "
+            f"{request_mode.value}"
+        )
+
+        # Todos los modos comienzan entendiendo el repositorio.
+        if not self._try_call(
+            task_state,
+            "explorer",
+        ):
+            return
+
+        explorer_result = (
+            task_state.last_result_of(
+                "explorer"
+            )
+        )
+
+        if (
+            explorer_result
+            and task_state.project_memory
+        ):
             task_state.project_memory.update_from_explorer(
                 explorer_result.data
             )
 
-        researcher_result = task_state.last_result_of(
-            "researcher"
+        # Una descripción pura se resuelve con Explorer.
+        if (
+            request_mode
+            == RequestMode.DESCRIPTION
+        ):
+            self._finalize_description(
+                task_state,
+                explorer_result,
+            )
+
+            return
+
+        # Análisis e implementación requieren Researcher.
+        if not self._try_call(
+            task_state,
+            "researcher",
+        ):
+            return
+
+        researcher_result = (
+            task_state.last_result_of(
+                "researcher"
+            )
         )
 
-        # Aunque exista evidencia técnica, el pedido puede seguir siendo
-        # funcionalmente ambiguo. En ese caso no se modifica el repositorio.
+        if researcher_result is None:
+            task_state.status = "blocked"
+
+            task_state.log(
+                "No existe resultado del "
+                "Researcher."
+            )
+
+            return
+
+        # Un análisis termina después del Researcher.
+        if (
+            request_mode
+            == RequestMode.ANALYSIS
+        ):
+            self._finalize_analysis(
+                task_state,
+                researcher_result,
+            )
+
+            return
+
+        # Desde aquí el modo es implementation.
         requirements_unclear = bool(
-            researcher_result
-            and researcher_result.data.get(
+            researcher_result.data.get(
                 "requirements_clear"
-            ) is False
+            )
+            is False
         )
 
         if requirements_unclear:
-            clarifications = researcher_result.data.get(
-                "clarifications_needed",
-                [],
+            clarifications = (
+                researcher_result.data.get(
+                    "clarifications_needed",
+                    [],
+                )
             )
 
-            if not isinstance(clarifications, list):
+            if not isinstance(
+                clarifications,
+                list,
+            ):
                 clarifications = []
 
             clarification_text = "; ".join(
@@ -403,15 +601,20 @@ class Orchestrator:
 
             if not clarification_text:
                 clarification_text = (
-                    "El Researcher determinó que faltan "
-                    "definiciones funcionales."
+                    "El Researcher determinó "
+                    "que faltan definiciones "
+                    "funcionales."
                 )
 
-            task_state.status = "needs_help"
+            task_state.status = (
+                "needs_help"
+            )
 
             task_state.log(
-                "El pedido requiere aclaraciones funcionales "
-                "antes de modificar el repositorio."
+                "El pedido requiere "
+                "aclaraciones funcionales "
+                "antes de modificar el "
+                "repositorio."
             )
 
             task_state.record_observation(
@@ -421,14 +624,18 @@ class Orchestrator:
 
             return
 
-        if not self._run_implement_and_test_cycle(
-            task_state
+        if not (
+            self
+            ._run_implement_and_test_cycle(
+                task_state
+            )
         ):
             return
 
-        # Si el Implementer declinó o se detectó un loop,
-        # no se ejecuta el Reviewer.
-        if task_state.status == "needs_help":
+        if (
+            task_state.status
+            == "needs_help"
+        ):
             return
 
         if not self._try_call(
@@ -437,20 +644,24 @@ class Orchestrator:
         ):
             return
 
-        tester_result = task_state.last_result_of(
-            "tester"
+        tester_result = (
+            task_state.last_result_of(
+                "tester"
+            )
         )
 
-        reviewer_result = task_state.last_result_of(
-            "reviewer"
+        reviewer_result = (
+            task_state.last_result_of(
+                "reviewer"
+            )
         )
 
-        implementer_result = task_state.last_result_of(
-            "implementer"
+        implementer_result = (
+            task_state.last_result_of(
+                "implementer"
+            )
         )
 
-        # La decisión se guarda únicamente cuando hubo una
-        # implementación real, el Tester pasó y el Reviewer aprobó.
         should_record_decision = bool(
             task_state.project_memory
             and tester_result
@@ -466,38 +677,241 @@ class Orchestrator:
             and implementer_result
             and implementer_result.data.get(
                 "evidence_sufficient"
-            ) is True
+            )
+            is True
             and task_state.files_modified
         )
 
         if should_record_decision:
             task_state.project_memory.record_decision(
-                request=task_state.original_request,
-                summary=implementer_result.data.get(
-                    "summary",
-                    "",
+                request=(
+                    task_state.original_request
+                ),
+                summary=(
+                    implementer_result.data.get(
+                        "summary",
+                        "",
+                    )
                 ),
                 files=list(
                     task_state.files_modified
                 ),
             )
 
-        self._finalize_status(task_state)
+        self._finalize_status(
+            task_state
+        )
+
+    @staticmethod
+    def _finalize_description(
+        task_state: TaskState,
+        explorer_result: Optional[
+            SubagentResult
+        ],
+    ) -> None:
+        if explorer_result is None:
+            task_state.status = (
+                "needs_help"
+            )
+
+            task_state.log(
+                "No existe evidencia del "
+                "Explorer para responder la "
+                "descripción."
+            )
+
+            return
+
+        data = explorer_result.data
+
+        files_read = data.get(
+            "archivos_leidos",
+            [],
+        )
+
+        summary = data.get(
+            "resumen_para_usuario",
+            "",
+        )
+
+        current_flow = data.get(
+            "flujo_actual",
+            [],
+        )
+
+        has_evidence = bool(
+            isinstance(
+                files_read,
+                list,
+            )
+            and files_read
+            and (
+                (
+                    isinstance(
+                        summary,
+                        str,
+                    )
+                    and summary.strip()
+                )
+                or (
+                    isinstance(
+                        current_flow,
+                        list,
+                    )
+                    and current_flow
+                )
+            )
+        )
+
+        if has_evidence:
+            task_state.status = "done"
+
+            task_state.log(
+                "Descripción completada por "
+                "el Explorer sin modificar "
+                "archivos."
+            )
+
+        else:
+            task_state.status = (
+                "needs_help"
+            )
+
+            task_state.log(
+                "El Explorer no reunió "
+                "evidencia suficiente para "
+                "completar la descripción."
+            )
+
+    @staticmethod
+    def _finalize_analysis(
+        task_state: TaskState,
+        researcher_result: SubagentResult,
+    ) -> None:
+        evidence_sufficient = bool(
+            researcher_result.data.get(
+                "evidence_sufficient"
+            )
+            is True
+        )
+
+        current_implementation = (
+            researcher_result.data.get(
+                "current_implementation",
+                [],
+            )
+        )
+
+        findings = (
+            researcher_result.data.get(
+                "findings",
+                [],
+            )
+        )
+
+        suggested_improvements = (
+            researcher_result.data.get(
+                "suggested_improvements",
+                [],
+            )
+        )
+
+        has_content = bool(
+            (
+                isinstance(
+                    current_implementation,
+                    list,
+                )
+                and current_implementation
+            )
+            or (
+                isinstance(
+                    findings,
+                    list,
+                )
+                and findings
+            )
+            or (
+                isinstance(
+                    suggested_improvements,
+                    list,
+                )
+                and suggested_improvements
+            )
+        )
+
+        if (
+            evidence_sufficient
+            and has_content
+        ):
+            task_state.status = "done"
+
+            task_state.log(
+                "Análisis completado sin "
+                "modificar el repositorio."
+            )
+
+            return
+
+        risks = (
+            researcher_result.data.get(
+                "risks_or_unknowns",
+                [],
+            )
+        )
+
+        if not isinstance(
+            risks,
+            list,
+        ):
+            risks = []
+
+        reason = "; ".join(
+            str(item)
+            for item in risks
+            if item
+        )
+
+        if not reason:
+            reason = (
+                "El Researcher no reunió "
+                "evidencia suficiente."
+            )
+
+        task_state.status = (
+            "needs_help"
+        )
+
+        task_state.log(
+            "No hubo evidencia suficiente "
+            "para completar el análisis."
+        )
+
+        task_state.record_observation(
+            f"Análisis incompleto: "
+            f"{reason}"
+        )
 
     @staticmethod
     def _finalize_status(
         task_state: TaskState,
     ) -> None:
-        # Los casos de falta de evidencia o loops ya quedaron
-        # marcados y no deben sobrescribirse.
-        if task_state.status == "needs_help":
+        if (
+            task_state.status
+            == "needs_help"
+        ):
             return
 
-        tester_result = task_state.last_result_of(
-            "tester"
+        tester_result = (
+            task_state.last_result_of(
+                "tester"
+            )
         )
-        reviewer_result = task_state.last_result_of(
-            "reviewer"
+
+        reviewer_result = (
+            task_state.last_result_of(
+                "reviewer"
+            )
         )
 
         tester_failed = bool(
@@ -518,24 +932,35 @@ class Orchestrator:
 
         if tester_failed:
             task_state.status = "blocked"
+
             task_state.log(
-                "La ejecución terminó, pero las "
-                "validaciones fallaron."
+                "La ejecución terminó, "
+                "pero las validaciones "
+                "fallaron."
             )
+
         elif reviewer_rejected:
             task_state.status = "blocked"
+
             task_state.log(
-                "La ejecución terminó, pero el Reviewer "
-                "no aprobó los cambios."
+                "La ejecución terminó, "
+                "pero el Reviewer no aprobó "
+                "los cambios."
             )
+
         else:
             task_state.status = "done"
-            task_state.log("Tarea completada.")
+
+            task_state.log(
+                "Tarea completada."
+            )
 
     def run(
         self,
         user_request: str,
-        workspace_path: Optional[str] = None,
+        workspace_path: Optional[
+            str
+        ] = None,
     ) -> TaskState:
         workspace = Path(
             workspace_path or "."
@@ -543,17 +968,27 @@ class Orchestrator:
 
         if not workspace.exists():
             raise FileNotFoundError(
-                f"El workspace no existe: {workspace}"
+                "El workspace no existe: "
+                f"{workspace}"
             )
 
         if not workspace.is_dir():
             raise NotADirectoryError(
-                f"El workspace no es una carpeta: {workspace}"
+                "El workspace no es una "
+                f"carpeta: {workspace}"
             )
+
+        request_mode = (
+            detect_request_mode(
+                user_request
+            )
+        )
 
         task_state = TaskState(
             original_request=user_request,
-            workspace_path=str(workspace),
+            workspace_path=str(
+                workspace
+            ),
         )
 
         task_state.project_memory = (
@@ -566,42 +1001,130 @@ class Orchestrator:
             f"Workspace: {workspace}"
         )
 
-        # Valida el workspace antes de gastar llamadas al LLM.
-        if self.policy_engine is not None:
+        observability = (
+            get_observability()
+        )
+
+        with observability.run_span(
+            user_request=user_request,
+            workspace_path=str(
+                workspace
+            ),
+            request_mode=(
+                request_mode.value
+            ),
+        ) as run_observation:
             try:
-                self.policy_engine.validate_workspace(
-                    str(workspace)
-                )
-            except PolicyViolation as exc:
-                task_state.status = "blocked"
-                task_state.log(
-                    "Workspace no autorizado por "
-                    f"agent.config.yaml: {exc}"
+                # Valida el workspace antes de gastar llamadas
+                # innecesarias al modelo.
+                if (
+                    self.policy_engine
+                    is not None
+                ):
+                    try:
+                        (
+                            self.policy_engine
+                            .validate_workspace(
+                                str(workspace)
+                            )
+                        )
+
+                    except (
+                        PolicyViolation
+                    ) as exc:
+                        task_state.status = (
+                            "blocked"
+                        )
+
+                        task_state.log(
+                            "Workspace no "
+                            "autorizado por "
+                            "agent.config.yaml: "
+                            f"{exc}"
+                        )
+
+                        return task_state
+
+                self._run_pipeline(
+                    task_state
                 )
 
-                self._save_memory(task_state)
                 return task_state
 
-        try:
-            self._run_pipeline(task_state)
-        finally:
-            self._save_memory(task_state)
+            finally:
+                # La memoria se guarda antes de construir el output
+                # para que cualquier error de persistencia también
+                # quede visible en la traza.
+                self._save_memory(
+                    task_state
+                )
 
-        return task_state
+                run_output = (
+                    observability
+                    .build_run_output(
+                        task_state
+                    )
+                )
+
+                run_output[
+                    "request_mode"
+                ] = request_mode.value
+
+                run_observation.update(
+                    output=run_output,
+                    metadata={
+                        "requestmode": (
+                            request_mode.value
+                        ),
+                        "status": (
+                            task_state.status
+                        ),
+                        "workspace": (
+                            workspace.name
+                        ),
+                        "subagentcount": len(
+                            task_state
+                            .subagent_results
+                        ),
+                        "modifiedfilescount": len(
+                            task_state
+                            .files_modified
+                        ),
+                    },
+                    level=(
+                        "ERROR"
+                        if (
+                            task_state.status
+                            == "blocked"
+                        )
+                        else "DEFAULT"
+                    ),
+                    status_message=(
+                        f"Final status: "
+                        f"{task_state.status}"
+                    ),
+                )
 
     @staticmethod
     def _save_memory(
         task_state: TaskState,
     ) -> None:
-        # Un error al guardar memoria no debe ocultar el
-        # resultado principal de la ejecución.
         try:
+            if (
+                task_state.project_memory
+                is None
+            ):
+                return
+
             task_state.project_memory.record_session(
                 task_state
             )
+
             task_state.project_memory.save()
+
         except Exception as exc:
             task_state.log(
-                "No se pudo guardar la memoria "
-                f"del proyecto: {exc}"
+                "No se pudo guardar la "
+                "memoria del proyecto: "
+                f"{exc}"
             )
