@@ -1,3 +1,4 @@
+import subprocess
 import time
 from pathlib import Path
 from typing import Collection, Optional
@@ -111,6 +112,8 @@ class ToolExecutor:
                 task_state.record_file_modified(
                     relative_path.as_posix()
                 )
+            elif tool_name == "run_command":
+                self._record_workspace_side_effects(task_state)
 
             return result
 
@@ -132,3 +135,78 @@ class ToolExecutor:
             )
 
             return f"TOOL_EXECUTION_ERROR: {exc}"
+
+    # Directorios de salida generada -- si un comando los toca (ej.
+    # "npm run build" escribiendo en dist/) no cuenta como un cambio de
+    # código que el agente haya hecho a propósito, y solo ensuciaría
+    # files_modified con ruido que confundiría al Reviewer. Se chequea
+    # por segmento de path, no solo como prefijo de la raíz, para que
+    # también se filtre un dist/ anidado (ej. en un monorepo).
+    _GENERATED_DIR_NAMES = frozenset({
+        "dist",
+        "build",
+        ".next",
+        "out",
+        "coverage",
+    })
+
+    @classmethod
+    def _record_workspace_side_effects(
+        cls,
+        task_state: TaskState,
+    ) -> None:
+
+        workspace = task_state.workspace_path
+
+        try:
+            status = subprocess.run(
+                ["git", "status", "--porcelain", "--", "."],
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if status.returncode != 0:
+                return
+
+            prefix_result = subprocess.run(
+                ["git", "rev-parse", "--show-prefix"],
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+            if prefix_result.returncode != 0:
+                return
+
+        except (OSError, subprocess.SubprocessError):
+            return
+
+        # git status con pathspec devuelve paths relativos a la raíz del
+        # repo, no al workspace -- hay que sacarles el prefijo.
+        prefix = prefix_result.stdout.strip()
+
+        for line in status.stdout.splitlines():
+            repo_relative_path = line[3:].strip()
+
+            if " -> " in repo_relative_path:
+                repo_relative_path = repo_relative_path.split(
+                    " -> ", 1
+                )[1]
+
+            if prefix and not repo_relative_path.startswith(prefix):
+                continue
+
+            workspace_relative_path = repo_relative_path[len(prefix):]
+
+            if not workspace_relative_path:
+                continue
+
+            path_segments = workspace_relative_path.split("/")
+
+            if cls._GENERATED_DIR_NAMES.intersection(path_segments):
+                continue
+
+            task_state.record_file_modified(workspace_relative_path)

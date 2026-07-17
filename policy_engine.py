@@ -81,7 +81,13 @@ class PolicyEngine:
 
         return cls(config)
 
-    def _validate_workspace(self, workspace_path: str) -> None:
+    def validate_workspace(self, workspace_path: str) -> None:
+        """
+        Chequea que workspace_path sea el workspace configurado en
+        agent.config.yaml (si hay uno configurado). Público para poder
+        validarlo de entrada, antes de arrancar el pipeline -- ver
+        Orchestrator.run().
+        """
         configured_workspace = self.config.get("workspace")
 
         if not configured_workspace:
@@ -106,7 +112,7 @@ class PolicyEngine:
         Valida una tool antes de ejecutarla.
         """
 
-        self._validate_workspace(workspace_path)
+        self.validate_workspace(workspace_path)
         normalized_arguments = deepcopy(arguments)
         requires_approval = False
         reasons: list[str] = []
@@ -263,22 +269,31 @@ class PolicyEngine:
         while normalized_pattern.startswith("./"):
             normalized_pattern = normalized_pattern[2:]
 
-        # **/*.pem también debe encontrar un archivo .pem en la raíz.
+        # "**/" es redundante con la regla de abajo (un patrón sin "/"
+        # ya matchea en cualquier profundidad), pero se acepta como
+        # forma explícita -- ej. "**/*.pem".
         if normalized_pattern.startswith("**/"):
-            pattern_without_prefix = normalized_pattern[3:]
+            normalized_pattern = normalized_pattern[3:]
 
-            if fnmatch(normalized_path, pattern_without_prefix):
-                return True
-
-        # Directorios como secrets/** o .github/**.
+        # Directorios como secrets/** o .github/** -- deben bloquear en
+        # cualquier profundidad del árbol (ej. src/secrets/key.txt),
+        # no solo si cuelgan directo de la raíz del workspace.
         if normalized_pattern.endswith("/**"):
             directory = normalized_pattern[:-3].rstrip("/")
+            path_segments = normalized_path.split("/")
 
-            return (
-                normalized_path == directory
-                or normalized_path.startswith(f"{directory}/")
-            )
+            return directory in path_segments
 
+        # Patrones sin "/" (ej. ".env", "*.pem", "package-lock.json"):
+        # igual que en un .gitignore, se comparan contra el nombre del
+        # archivo nada más, así bloquean en cualquier profundidad y no
+        # solo cuando el archivo está justo en la raíz del workspace.
+        if "/" not in normalized_pattern:
+            basename = normalized_path.rsplit("/", 1)[-1]
+            return fnmatch(basename, normalized_pattern)
+
+        # Patrones con path explícito (ej. "config/prod.yaml"):
+        # anclados a la raíz del workspace.
         return fnmatch(
             normalized_path,
             normalized_pattern,

@@ -1,8 +1,12 @@
+from pathlib import Path
+
 from tools.base import Tool
 
 
 def _execute(path: str, content: str) -> str:
     try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
         return f"Successfully wrote file: {path}"

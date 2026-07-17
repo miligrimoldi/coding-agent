@@ -11,7 +11,7 @@ EXPLORER_TOOLS = get_tools_for(ALLOWED_TOOLS)
 
 
 class Explorer:
-    MAX_ITERATIONS = 8
+    MAX_ITERATIONS = 9
     REPEAT_THRESHOLD = 2
 
     SYSTEM_PROMPT = """
@@ -23,10 +23,21 @@ carpetas, el lenguaje y framework utilizado, las dependencias principales,
 las convenciones de organización del código y cuáles son los archivos
 más relevantes para resolver el pedido del usuario.
 
+En el primer mensaje recibís un JSON con pedido_original y
+memoria_previa_del_proyecto (puede ser null). Cuando no es null, es un
+resumen de lo que se aprendió en corridas anteriores sobre este mismo
+repositorio: arquitectura ya detectada, archivos importantes, dependencias,
+comandos que funcionaron y decisiones/bugs previos.
+
 Reglas:
 - Usá list_files y read_file para inspeccionar el repositorio real.
 - No inventes contenido que no hayas leído.
 - No repitas la misma lectura o listado si ya obtuviste esa información.
+- Si hay memoria previa del proyecto, usala como punto de partida para
+  orientar la exploración -- no hace falta re-descubrir todo desde cero --
+  pero no la des por buena a ciegas para el JSON final: confirmá con
+  list_files/read_file si sigue siendo válida, sobre todo si el pedido
+  actual toca archivos que la memoria no menciona.
 - Prestá especial atención a package.json, schema.prisma, módulos,
   controllers, services, DTOs y tests.
 - Cuando tengas suficiente evidencia, respondé con un único objeto JSON,
@@ -48,12 +59,44 @@ Reglas:
   }
 """
 
+    FINAL_ITERATION_REMINDER = """
+AVISO DEL SISTEMA: esta es la última iteración disponible, no podés usar
+más tools. Respondé ahora ÚNICAMENTE con un objeto JSON (sin texto antes
+ni después) con esta forma exacta, completando lo que hayas podido
+averiguar hasta acá:
+{
+  "lenguaje": "...",
+  "framework": "...",
+  "archivos_relevantes": ["...", "..."],
+  "estructura": "resumen breve de cómo está organizado el repositorio",
+  "dependencias_detectadas": ["...", "..."],
+  "scripts_detectados": {
+    "build": "...",
+    "test": "...",
+    "lint": "..."
+  },
+  "puntos_de_entrada_sugeridos": [
+    "archivo o función donde probablemente haya que implementar el cambio"
+  ]
+}
+"""
+
     def __init__(self, tool_executor: ToolExecutor):
         self.tool_executor = tool_executor
 
     def run(self, task_state: TaskState) -> SubagentResult:
         client = get_client()
         task_state.set_phase("exploration")
+
+        memory = task_state.project_memory
+        used_memory = bool(memory and memory.has_prior_knowledge())
+
+        user_content = {
+            "pedido_original": task_state.original_request,
+            "memoria_previa_del_proyecto": (
+                memory.as_context() if used_memory else None
+            ),
+        }
 
         messages = [
             {
@@ -62,19 +105,24 @@ Reglas:
             },
             {
                 "role": "user",
-                "content": (
-                    "Pedido original del usuario: "
-                    f"{task_state.original_request}"
-                ),
+                "content": json.dumps(user_content, ensure_ascii=False),
             },
         ]
 
         for iteration in range(1, self.MAX_ITERATIONS + 1):
+            is_last_iteration = iteration == self.MAX_ITERATIONS
+
+            if is_last_iteration:
+                messages.append({
+                    "role": "user",
+                    "content": self.FINAL_ITERATION_REMINDER,
+                })
+
             response = client.chat.completions.create(
                 model=MODEL,
                 messages=messages,
                 tools=EXPLORER_TOOLS,
-                tool_choice="auto",
+                tool_choice="none" if is_last_iteration else "auto",
             )
 
             assistant_message = response.choices[0].message
@@ -86,6 +134,7 @@ Reglas:
                     task_state,
                     assistant_message.content,
                     iteration,
+                    used_memory,
                 )
 
             messages.append(assistant_message)
@@ -166,7 +215,7 @@ Reglas:
                 "de iteraciones."
             ),
             data={},
-            sources=["repository"],
+            sources=["repository", "memory"] if used_memory else ["repository"],
         )
 
     @staticmethod
@@ -174,6 +223,7 @@ Reglas:
         task_state: TaskState,
         content: str,
         iterations: int,
+        used_memory: bool,
     ) -> SubagentResult:
         try:
             data = json.loads(content)
@@ -184,11 +234,13 @@ Reglas:
             )
             data = {"resumen_libre": content}
 
+        sources = ["repository", "memory"] if used_memory else ["repository"]
+
         return SubagentResult(
             subagent="explorer",
             summary=(
                 f"Repositorio explorado en {iterations} iteraciones."
             ),
             data=data,
-            sources=["repository"],
+            sources=sources,
         )

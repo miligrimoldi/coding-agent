@@ -21,7 +21,7 @@ def build_orchestrator() -> Orchestrator:
         supervision_mode=True,
     )
 
-    orchestrator = Orchestrator()
+    orchestrator = Orchestrator(policy_engine=policy_engine)
 
     orchestrator.register(
         "explorer",
@@ -35,7 +35,7 @@ def build_orchestrator() -> Orchestrator:
 
     orchestrator.register(
         "implementer",
-        Implementer(),
+        Implementer(tool_executor),
     )
 
     orchestrator.register(
@@ -45,7 +45,7 @@ def build_orchestrator() -> Orchestrator:
 
     orchestrator.register(
         "reviewer",
-        Reviewer(),
+        Reviewer(tool_executor),
     )
 
     return orchestrator

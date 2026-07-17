@@ -2,7 +2,10 @@ import json
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from project_memory import ProjectMemory
 
 
 def _now() -> str:
@@ -41,6 +44,10 @@ class TaskState:
         # Se guarda como diccionario para que sea serializable y auditable.
         self.tool_call_history: list[dict] = []
         self.iterations_by_subagent: dict[str, int] = {}
+
+        # La asigna el Orchestrator al arrancar; puede quedar en None si
+        # TaskState se instancia fuera del flujo normal (ej. tests).
+        self.project_memory: Optional["ProjectMemory"] = None
 
     # ---------- Escritura ----------
 
@@ -136,6 +143,11 @@ class TaskState:
             "observations": self.observations,
             "tool_call_history": self.tool_call_history,
             "iterations_by_subagent": self.iterations_by_subagent,
+            "project_memory_path": (
+                str(self.project_memory.storage_path)
+                if self.project_memory
+                else None
+            ),
         }
 
     def to_json(self, indent: int = 2) -> str:
