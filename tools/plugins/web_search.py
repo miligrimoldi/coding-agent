@@ -1,8 +1,36 @@
 import json
 import os
 from typing import Optional
+from urllib.parse import urlparse
 
 from tools.base import Tool
+
+
+def _is_allowed_url(
+    url: str,
+    domains: Optional[list[str]],
+) -> bool:
+    if not domains:
+        return True
+
+    if not isinstance(url, str) or not url.strip():
+        return False
+
+    hostname = (
+        urlparse(url).hostname or ""
+    ).lower()
+
+    normalized_domains = [
+        domain.strip().lower().lstrip(".")
+        for domain in domains
+        if isinstance(domain, str) and domain.strip()
+    ]
+
+    return any(
+        hostname == domain
+        or hostname.endswith(f".{domain}")
+        for domain in normalized_domains
+    )
 
 
 def _execute(
@@ -41,17 +69,34 @@ def _execute(
             include_domains=domains or [],
         )
 
+        raw_results = response.get(
+            "results",
+            [],
+        )
+
         results = [
             {
                 "title": item.get(
                     "title",
                     "Sin título",
                 ),
-                "url": item.get("url", ""),
-                "content": item.get("content", ""),
-                "score": item.get("score"),
+                "url": item.get(
+                    "url",
+                    "",
+                ),
+                "content": item.get(
+                    "content",
+                    "",
+                ),
+                "score": item.get(
+                    "score",
+                ),
             }
-            for item in response.get("results", [])
+            for item in raw_results
+            if _is_allowed_url(
+                item.get("url", ""),
+                domains,
+            )
         ]
 
         return json.dumps({

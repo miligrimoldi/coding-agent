@@ -26,6 +26,21 @@ class ToolExecutor:
         task_state: TaskState,
         allowed_tools: Optional[Collection[str]] = None,
     ) -> str:
+        # Copia los argumentos para normalizarlos sin modificar
+        # el diccionario original enviado por el subagente.
+        arguments = dict(arguments or {})
+
+        # Para list_files, un path vacío representa la raíz del
+        # workspace. Se normaliza antes de validar la política.
+        if tool_name == "list_files":
+            path_argument = arguments.get("path")
+
+            if (
+                not isinstance(path_argument, str)
+                or not path_argument.strip()
+            ):
+                arguments["path"] = "."
+
         if allowed_tools is not None and tool_name not in allowed_tools:
             message = (
                 f"El subagente '{subagent}' no tiene permitido usar "
@@ -38,7 +53,9 @@ class ToolExecutor:
                 args=arguments,
                 outcome="blocked_by_agent_permissions",
             )
+
             task_state.record_observation(message)
+
             return f"POLICY_BLOCKED: {message}"
 
         try:
@@ -57,7 +74,9 @@ class ToolExecutor:
                 args=arguments,
                 outcome="blocked_by_policy",
             )
+
             task_state.record_observation(str(exc))
+
             return f"POLICY_BLOCKED: {exc}"
 
         if decision.requires_approval and self.supervision_mode:
@@ -67,9 +86,16 @@ class ToolExecutor:
             print(f"Argumentos: {arguments}")
             print(f"Motivo: {decision.approval_reason}")
 
-            approval = input("¿Aprobar? (yes/no): ").strip().lower()
+            approval = input(
+                "¿Aprobar? (yes/no): "
+            ).strip().lower()
 
-            if approval not in {"yes", "y", "si", "sí"}:
+            if approval not in {
+                "yes",
+                "y",
+                "si",
+                "sí",
+            }:
                 task_state.record_tool_call(
                     subagent=subagent,
                     tool_name=tool_name,
@@ -78,7 +104,8 @@ class ToolExecutor:
                 )
 
                 return (
-                    f"Ejecución de '{tool_name}' rechazada por el usuario."
+                    f"Ejecución de '{tool_name}' "
+                    "rechazada por el usuario."
                 )
 
         started_at = time.perf_counter()
@@ -90,7 +117,9 @@ class ToolExecutor:
                     cwd=task_state.workspace_path,
                 )
             else:
-                result = tool.execute(**decision.arguments)
+                result = tool.execute(
+                    **decision.arguments
+                )
 
             duration_ms = (
                 time.perf_counter() - started_at
@@ -101,19 +130,29 @@ class ToolExecutor:
                 tool_name=tool_name,
                 args=arguments,
                 outcome="executed",
-                duration_ms=round(duration_ms, 2),
+                duration_ms=round(
+                    duration_ms,
+                    2,
+                ),
             )
 
             if tool.category == "write":
-                written_path = Path(decision.arguments["path"])
+                written_path = Path(
+                    decision.arguments["path"]
+                )
+
                 relative_path = written_path.relative_to(
                     Path(task_state.workspace_path)
                 )
+
                 task_state.record_file_modified(
                     relative_path.as_posix()
                 )
+
             elif tool_name == "run_command":
-                self._record_workspace_side_effects(task_state)
+                self._record_workspace_side_effects(
+                    task_state
+                )
 
             return result
 
@@ -127,7 +166,10 @@ class ToolExecutor:
                 tool_name=tool_name,
                 args=arguments,
                 outcome="execution_error",
-                duration_ms=round(duration_ms, 2),
+                duration_ms=round(
+                    duration_ms,
+                    2,
+                ),
             )
 
             task_state.record_observation(
@@ -136,12 +178,8 @@ class ToolExecutor:
 
             return f"TOOL_EXECUTION_ERROR: {exc}"
 
-    # Directorios de salida generada -- si un comando los toca (ej.
-    # "npm run build" escribiendo en dist/) no cuenta como un cambio de
-    # código que el agente haya hecho a propósito, y solo ensuciaría
-    # files_modified con ruido que confundiría al Reviewer. Se chequea
-    # por segmento de path, no solo como prefijo de la raíz, para que
-    # también se filtre un dist/ anidado (ej. en un monorepo).
+    # Directorios de salida generada. Si un comando los modifica,
+    # no cuentan como cambios de código realizados por el agente.
     _GENERATED_DIR_NAMES = frozenset({
         "dist",
         "build",
@@ -155,12 +193,17 @@ class ToolExecutor:
         cls,
         task_state: TaskState,
     ) -> None:
-
         workspace = task_state.workspace_path
 
         try:
             status = subprocess.run(
-                ["git", "status", "--porcelain", "--", "."],
+                [
+                    "git",
+                    "status",
+                    "--porcelain",
+                    "--",
+                    ".",
+                ],
                 cwd=workspace,
                 capture_output=True,
                 text=True,
@@ -171,7 +214,11 @@ class ToolExecutor:
                 return
 
             prefix_result = subprocess.run(
-                ["git", "rev-parse", "--show-prefix"],
+                [
+                    "git",
+                    "rev-parse",
+                    "--show-prefix",
+                ],
                 cwd=workspace,
                 capture_output=True,
                 text=True,
@@ -184,29 +231,43 @@ class ToolExecutor:
         except (OSError, subprocess.SubprocessError):
             return
 
-        # git status con pathspec devuelve paths relativos a la raíz del
-        # repo, no al workspace -- hay que sacarles el prefijo.
+        # git status devuelve paths relativos a la raíz del
+        # repositorio. Se elimina el prefijo del workspace.
         prefix = prefix_result.stdout.strip()
 
         for line in status.stdout.splitlines():
             repo_relative_path = line[3:].strip()
 
+            # Maneja archivos renombrados:
+            # "archivo-viejo -> archivo-nuevo".
             if " -> " in repo_relative_path:
                 repo_relative_path = repo_relative_path.split(
-                    " -> ", 1
+                    " -> ",
+                    1,
                 )[1]
 
-            if prefix and not repo_relative_path.startswith(prefix):
+            if (
+                prefix
+                and not repo_relative_path.startswith(prefix)
+            ):
                 continue
 
-            workspace_relative_path = repo_relative_path[len(prefix):]
+            workspace_relative_path = (
+                repo_relative_path[len(prefix):]
+            )
 
             if not workspace_relative_path:
                 continue
 
-            path_segments = workspace_relative_path.split("/")
+            path_segments = (
+                workspace_relative_path.split("/")
+            )
 
-            if cls._GENERATED_DIR_NAMES.intersection(path_segments):
+            if cls._GENERATED_DIR_NAMES.intersection(
+                path_segments
+            ):
                 continue
 
-            task_state.record_file_modified(workspace_relative_path)
+            task_state.record_file_modified(
+                workspace_relative_path
+            )
