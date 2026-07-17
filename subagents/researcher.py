@@ -4,7 +4,6 @@ from pathlib import Path
 from llm_client import get_client, MODEL
 from task_state import TaskState, SubagentResult
 from tool_executor import ToolExecutor
-from typing import Optional
 
 
 class Researcher:
@@ -34,6 +33,12 @@ Reglas:
 - No implementes código.
 - No inventes APIs, decorators, comandos ni convenciones.
 - Respondé con un único JSON sin texto alrededor.
+- Un finding técnico que recomiende una API, módulo, decorator o patrón
+  concreto debe incluir al menos un chunk_id o URL en evidence.
+- Si no podés respaldar una recomendación concreta con evidencia,
+  no la presentes como finding: agregala a risks_or_unknowns.
+- Si los chunks recuperados no cubren el tema central del pedido,
+  marcá evidence_sufficient=false para activar el fallback web.
 
 Formato:
 {
@@ -102,6 +107,7 @@ Formato:
             task_state=task_state,
         )
 
+        # Primer control: evidencia numérica determinada por el Retriever.
         used_web_fallback = not rag_data.get(
             "evidence_sufficient",
             False,
@@ -117,6 +123,7 @@ Formato:
                 task_state=task_state,
             )
 
+        # Primera síntesis semántica.
         synthesized_data = self._synthesize(
             task_state=task_state,
             explorer_data=explorer_result.data,
@@ -125,15 +132,43 @@ Formato:
             used_web_fallback=used_web_fallback,
         )
 
-        synthesized_data["research_query"] = (
-            research_query
+        # Segundo control: aunque el Retriever haya superado el umbral,
+        # el LLM puede determinar que los chunks no responden realmente
+        # al pedido.
+        semantic_evidence_insufficient = not synthesized_data.get(
+            "evidence_sufficient",
+            False,
         )
+
+        if (
+            semantic_evidence_insufficient
+            and not used_web_fallback
+        ):
+            used_web_fallback = True
+
+            web_data = self._run_web_fallback(
+                query=research_query,
+                task_state=task_state,
+            )
+
+            # Vuelve a sintetizar utilizando RAG + resultados web.
+            synthesized_data = self._synthesize(
+                task_state=task_state,
+                explorer_data=explorer_result.data,
+                rag_data=rag_data,
+                web_data=web_data,
+                used_web_fallback=True,
+            )
+
+        # Metadatos finales de la investigación.
+        synthesized_data["research_query"] = research_query
 
         synthesized_data["used_web_fallback"] = (
             used_web_fallback
         )
 
         synthesized_data["ecosystems_searched"] = ecosystems
+
         synthesized_data["missing_rag_evidence_for"] = (
             rag_data.get("missing_evidence_for", [])
         )
@@ -226,7 +261,7 @@ Formato:
                 result.get("results", [])
             )
 
-        # El mismo chunk podría aparecer en búsquedas diferentes.
+        # Evita conservar el mismo chunk varias veces.
         unique_results: dict[str, dict] = {}
 
         for result in combined_results:
@@ -428,9 +463,6 @@ Formato:
     ) -> list[str]:
         """
         Detecta todos los ecosistemas relevantes para la tarea.
-
-        No se limita al framework principal porque una misma funcionalidad
-        puede requerir documentación de NestJS, Prisma y Jest.
         """
 
         ecosystems: list[str] = []
@@ -460,7 +492,10 @@ Formato:
         # NestJS
         if (
             "nest" in framework
-            or any("@nestjs/" in dependency for dependency in dependencies)
+            or any(
+                "@nestjs/" in dependency
+                for dependency in dependencies
+            )
         ):
             ecosystems.append("nestjs")
 
@@ -476,11 +511,27 @@ Formato:
             "enum",
             "filtro",
             "where",
+            "eliminar",
+            "borrar",
+            "delete",
+            "deletemany",
+            "retención",
+            "retencion",
+            "viejo",
+            "viejos",
+            "antiguo",
+            "antiguos",
         )
 
         uses_prisma = (
-            any("prisma" in dependency for dependency in dependencies)
-            or any("schema.prisma" in path for path in relevant_files)
+            any(
+                "prisma" in dependency
+                for dependency in dependencies
+            )
+            or any(
+                "schema.prisma" in path
+                for path in relevant_files
+            )
         )
 
         request_needs_prisma = any(
@@ -514,7 +565,6 @@ Formato:
         if uses_jest and request_needs_testing:
             ecosystems.append("jest")
 
-        # Evita duplicados manteniendo el orden.
         return list(dict.fromkeys(ecosystems))
 
     @staticmethod
@@ -567,6 +617,7 @@ Formato:
 
             return {
                 "results": [],
+                "evidence_sufficient": False,
                 "error": (
                     "La tool no devolvió un objeto JSON."
                 ),

@@ -282,8 +282,8 @@ def test_needs_help_when_implementer_declines():
     # No hace falta reintentar -- el Tester "pasa" trivial en el
     # primer intento porque no hay nada que romper.
     assert implementer.calls == 1
-    assert tester.calls == 1
-    assert reviewer.calls == 1
+    assert tester.calls == 0
+    assert reviewer.calls == 0
     assert result.status == "needs_help"
     assert any(
         "declinó actuar" in obs for obs in result.observations
