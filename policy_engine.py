@@ -249,10 +249,13 @@ class PolicyEngine:
         value: str,
         patterns: list[str],
     ) -> bool:
-        lowered_value = value.lower()
+        # Normaliza espacios/tabs repetidos antes de comparar -- si no,
+        # "git  push" (doble espacio) evade una regla "git push" pese a
+        # ejecutarse exactamente igual (el shell/shlex los colapsa).
+        normalized_value = " ".join(value.lower().split())
 
         return any(
-            pattern.lower() in lowered_value
+            " ".join(pattern.lower().split()) in normalized_value
             for pattern in patterns
         )
 
