@@ -6,7 +6,7 @@ from tool_executor import ToolExecutor
 from tools.loader import get_tools_for
 
 
-ALLOWED_TOOLS = ["read_file", "write_file", "list_files"]
+ALLOWED_TOOLS = ["read_file", "write_file", "list_files", "run_command"]
 IMPLEMENTER_TOOLS = get_tools_for(ALLOWED_TOOLS)
 
 
@@ -56,6 +56,11 @@ Reglas:
   que harías, sin haber llamado a write_file, NO es una implementación
   válida -- en ese caso evidence_sufficient debe ser false y changes debe
   quedar vacío, aunque hayas juntado evidencia de sobra.
+  - Usá run_command solamente cuando sea necesario para completar la
+    implementación, por ejemplo para generar artefactos o migraciones.
+  - No ejecutes tests generales: esa responsabilidad pertenece al Tester.
+  - No ejecutes comandos que no estén respaldados por la evidencia del
+    repositorio.
 - Cuando termines -- hayas aplicado los cambios o decidido que no podés
   continuar -- respondé con un único objeto JSON, sin texto alrededor, con
   esta forma exacta:
@@ -265,21 +270,64 @@ explicá en risks_or_notes que no se aplicaron cambios reales.
                 "Implementer no devolvió JSON válido; "
                 "se guardó como texto libre."
             )
-            data = {"resumen_libre": content}
+            data = {
+                "evidence_sufficient": False,
+                "summary": "",
+                "changes": [],
+                "risks_or_notes": [],
+                "resumen_libre": content,
+            }
 
-        changes = (
-            data.get("changes", [])
-            if isinstance(data, dict)
-            else []
+        # Garantiza que siempre se trabaje con un diccionario.
+        if not isinstance(data, dict):
+            data = {
+                "evidence_sufficient": False,
+                "summary": "",
+                "changes": [],
+                "risks_or_notes": [
+                    "La respuesta final del Implementer no tenía "
+                    "el formato esperado."
+                ],
+            }
+
+        # Archivos que realmente fueron modificados mediante write_file.
+        actual_modified_files = set(task_state.files_modified)
+
+        # Si no hubo escrituras reales, no se acepta que el modelo
+        # declare cambios solamente en su respuesta.
+        if not actual_modified_files:
+            data["evidence_sufficient"] = False
+            data["changes"] = []
+
+            notes = data.get("risks_or_notes", [])
+
+            if not isinstance(notes, list):
+                notes = []
+
+            notes.append(
+                "No se registraron escrituras reales en el workspace."
+            )
+
+            data["risks_or_notes"] = notes
+
+        changes = data.get("changes", [])
+
+        if not isinstance(changes, list):
+            changes = []
+            data["changes"] = changes
+
+        sources = (
+            ["repository", "memory"]
+            if used_memory
+            else ["repository"]
         )
-
-        sources = ["repository", "memory"] if used_memory else ["repository"]
 
         return SubagentResult(
             subagent="implementer",
             summary=(
                 f"Implementación completada en {iterations} "
-                f"iteraciones ({len(changes)} archivo(s) modificado(s))."
+                f"iteraciones ({len(actual_modified_files)} "
+                f"archivo(s) modificado(s) realmente)."
             ),
             data=data,
             sources=sources,

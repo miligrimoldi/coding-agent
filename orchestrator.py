@@ -126,9 +126,10 @@ class Orchestrator:
         intentó y en qué quedó trabado, en vez de seguir reintentando a
         ciegas.
 
-        De paso alimenta la memoria del proyecto: comandos que efectivamente
-        funcionaron, la decisión final si se logró resolver, y el bug si
-        hubo que reintentar (resuelto, agotado, o abandonado por loop).
+        De paso alimenta la memoria del proyecto con los comandos que
+        efectivamente funcionaron y con los bugs detectados durante los
+        reintentos. La decisión final se guarda después de que el Reviewer
+        aprueba los cambios.
 
         Devuelve False solo si algún subagente revienta con una excepción
         (corta la ejecución). En cualquier otro desenlace devuelve True --
@@ -214,17 +215,6 @@ class Orchestrator:
                         ),
                         resolved=True,
                         resolution=f"Resuelto en el intento {attempt}.",
-                    )
-
-                if memory:
-                    memory.record_decision(
-                        request=task_state.original_request,
-                        summary=(
-                            implementer_result.data.get("summary", "")
-                            if implementer_result
-                            else ""
-                        ),
-                        files=list(task_state.files_modified),
                     )
 
                 return True
@@ -322,6 +312,38 @@ class Orchestrator:
 
         if not self._try_call(task_state, "reviewer"):
             return
+
+        tester_result = task_state.last_result_of("tester")
+        reviewer_result = task_state.last_result_of("reviewer")
+        implementer_result = task_state.last_result_of("implementer")
+
+        # Una decisión solo se guarda cuando:
+        # - el Tester pasó;
+        # - el Reviewer aprobó;
+        # - el Implementer tuvo evidencia suficiente;
+        # - hubo modificaciones reales.
+        should_record_decision = bool(
+            task_state.project_memory
+            and tester_result
+            and tester_result.data.get("all_passed", False)
+            and reviewer_result
+            and reviewer_result.data.get("approved", False)
+            and implementer_result
+            and implementer_result.data.get(
+                "evidence_sufficient"
+            ) is True
+            and task_state.files_modified
+        )
+
+        if should_record_decision:
+            task_state.project_memory.record_decision(
+                request=task_state.original_request,
+                summary=implementer_result.data.get(
+                    "summary",
+                    "",
+                ),
+                files=list(task_state.files_modified),
+            )
 
         self._finalize_status(task_state)
 
