@@ -373,6 +373,54 @@ class Orchestrator:
                 explorer_result.data
             )
 
+        researcher_result = task_state.last_result_of(
+            "researcher"
+        )
+
+        # Aunque exista evidencia técnica, el pedido puede seguir siendo
+        # funcionalmente ambiguo. En ese caso no se modifica el repositorio.
+        requirements_unclear = bool(
+            researcher_result
+            and researcher_result.data.get(
+                "requirements_clear"
+            ) is False
+        )
+
+        if requirements_unclear:
+            clarifications = researcher_result.data.get(
+                "clarifications_needed",
+                [],
+            )
+
+            if not isinstance(clarifications, list):
+                clarifications = []
+
+            clarification_text = "; ".join(
+                str(item)
+                for item in clarifications
+                if item
+            )
+
+            if not clarification_text:
+                clarification_text = (
+                    "El Researcher determinó que faltan "
+                    "definiciones funcionales."
+                )
+
+            task_state.status = "needs_help"
+
+            task_state.log(
+                "El pedido requiere aclaraciones funcionales "
+                "antes de modificar el repositorio."
+            )
+
+            task_state.record_observation(
+                "Aclaraciones requeridas: "
+                f"{clarification_text}"
+            )
+
+            return
+
         if not self._run_implement_and_test_cycle(
             task_state
         ):
@@ -392,9 +440,11 @@ class Orchestrator:
         tester_result = task_state.last_result_of(
             "tester"
         )
+
         reviewer_result = task_state.last_result_of(
             "reviewer"
         )
+
         implementer_result = task_state.last_result_of(
             "implementer"
         )
@@ -427,7 +477,9 @@ class Orchestrator:
                     "summary",
                     "",
                 ),
-                files=list(task_state.files_modified),
+                files=list(
+                    task_state.files_modified
+                ),
             )
 
         self._finalize_status(task_state)

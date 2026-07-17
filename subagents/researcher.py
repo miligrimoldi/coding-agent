@@ -39,10 +39,21 @@ Reglas:
   no la presentes como finding: agregala a risks_or_unknowns.
 - Si los chunks recuperados no cubren el tema central del pedido,
   marcá evidence_sufficient=false para activar el fallback web.
+- Diferenciá evidencia técnica suficiente de requisitos funcionales claros.
+- evidence_sufficient indica si existe evidencia técnica para orientar una
+  solución.
+- requirements_clear indica si el pedido define suficientemente las
+  decisiones funcionales necesarias para implementar.
+- Para operaciones destructivas o automáticas, como eliminar datos, no
+  supongas períodos, frecuencias, políticas de retención ni borrado físico.
+- Si falta alguna de esas decisiones, marcá requirements_clear=false y
+  enumeralas en clarifications_needed.
 
 Formato:
 {
   "evidence_sufficient": true,
+  "requirements_clear": true,
+  "clarifications_needed": [],
   "used_web_fallback": false,
   "findings": [
     {
