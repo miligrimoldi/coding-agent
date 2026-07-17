@@ -1,11 +1,11 @@
 {
   "workspace_path": "/Users/pilarsilveyra/faculty/coding-agent/target-project/issue-tracker-api",
   "created_at": "2026-07-17T19:26:06.526451+00:00",
-  "updated_at": "2026-07-17T20:33:16.081963+00:00",
+  "updated_at": "2026-07-17T20:36:40.265757+00:00",
   "architecture": {
     "lenguaje": "TypeScript",
     "framework": "NestJS",
-    "estructura": "Proyecto NestJS con un módulo Tickets que usa Prisma para persistir tickets. Estructura típica: src/ con módulos, controladores y servicios; dto para datos de entrada; prisma/ para el cliente de base de datos; test/ para pruebas."
+    "estructura": "Proyecto NestJS con un módulo Tickets que usa Prisma para persistir tickets. Estructura típica: src/ con módulos, controladores y servicios; dto para datos de entrada; prisma/ para el cliente de base de datos; test/ para pruebas. Validaciones con class-validator y ValidationPipe global configurado."
   },
   "important_files": [
     "src/tickets/tickets.controller.ts",
@@ -41,7 +41,8 @@
   "useful_commands": {
     "prisma_validate": "npx prisma validate",
     "build": "npm run build",
-    "test": "npm run test"
+    "test": "npm run test",
+    "lint": "npm run lint"
   },
   "decisions": [],
   "bugs_investigated": [
@@ -100,6 +101,14 @@
       "request": "Agregar una validación para que el título de un ticket tenga como máximo 120 caracteres, manteniendo la validación mínima actual. Incluir tests unitarios que comprueben que un título válido es aceptado y que uno de más de 120 caracteres es rechazado.",
       "status": "in_progress",
       "files_modified": []
+    },
+    {
+      "timestamp": "2026-07-17T20:36:40.265495+00:00",
+      "request": "Agregar una validación para que el título de un ticket tenga como máximo 120 caracteres, manteniendo la validación mínima actual. Incluir tests unitarios que comprueben que un título válido es aceptado y que uno de más de 120 caracteres es rechazado.",
+      "status": "blocked",
+      "files_modified": [
+        "src/tickets/dto/create-ticket.dto.ts"
+      ]
     }
   ]
 }
