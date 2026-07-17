@@ -19,17 +19,18 @@ IMPLEMENTER_TOOLS = get_tools_for(ALLOWED_TOOLS)
 
 
 class Implementer:
-    MAX_ITERATIONS = 12
+    MAX_ITERATIONS = 14
     REPEAT_THRESHOLD = 2
 
-    # Si ya leyó suficiente y todavía no escribió, fuerza el primer cambio.
-    ACTION_ITERATION = 8
+    # Si ya leyó suficiente y todavía no escribió,
+    # fuerza el primer cambio.
+    ACTION_ITERATION = 7
 
-    # Si la tarea pide tests y ya modificó código productivo, fuerza la
-    # escritura del archivo de tests antes de terminar.
-    TEST_COMPLETION_ITERATION = 10
+    # Si la tarea pide tests y ya modificó código productivo,
+    # fuerza la escritura del archivo de tests antes de terminar.
+    TEST_COMPLETION_ITERATION = 9
 
-    # Evita que el Implementer consuama todas las iteraciones explorando.
+    # Evita consumir todas las iteraciones explorando.
     MAX_DISCOVERY_CALLS_BEFORE_WRITE = 6
 
     TEST_FILE_SUFFIXES = (
@@ -60,7 +61,8 @@ Recibís, en el primer mensaje, un JSON con:
   para corregir el problema puntual y no repitas el mismo cambio;
 - memoria_previa_del_proyecto: puede ser null. Si no lo es, contiene
   decisiones, convenciones, comandos y bugs de corridas anteriores sobre
-  este mismo repositorio.
+  este mismo repositorio;
+- tests_requeridos: indica si el pedido exige agregar o modificar tests.
 
 Reglas:
 - Usá read_file para ver el contenido actual de un archivo antes de
@@ -69,36 +71,42 @@ Reglas:
   archivo existente, primero leelo, después generá su contenido completo
   modificado y recién entonces escribilo.
 - Para crear un archivo nuevo, como un nuevo archivo de tests, primero
-  confirmá el directorio y sus convenciones mediante list_files y/o leyendo
-  archivos similares. No intentes leer repetidamente un archivo que todavía
-  no existe.
+  confirmá el directorio y sus convenciones mediante list_files o leyendo
+  archivos similares.
+- No intentes leer repetidamente un archivo que todavía no existe.
 - No inventes APIs, decorators, comandos ni convenciones que no estén
   respaldadas por los hallazgos del Explorer o del Researcher.
 - No modifiques archivos que no hayan sido identificados como relevantes o
   cuya modificación no puedas justificar con la evidencia disponible.
-- Usá exclusivamente paths confirmados por Explorer, list_files o read_file.
-  No inventes variantes de paths.
+- Usá exclusivamente paths confirmados mediante Explorer, list_files o
+  read_file.
+- No inventes variantes de paths.
+- La memoria previa solo es orientación. Confirmá los paths en el repositorio
+  actual antes de usarlos.
 - No repitas la misma lectura, escritura o listado si ya obtuviste esa
   información.
 - Si hallazgos_researcher indica requirements_clear=false, no escribas
-  código. Explicá qué aclaraciones funcionales necesita el usuario.
+  código. Explicá qué aclaraciones necesita el usuario.
 - Si el pedido es ambiguo o no hay evidencia suficiente para decidir con
   confianza, no escribas código al azar. Respondé con evidence_sufficient
-  en false, changes vacío y explicá en risks_or_notes qué falta.
+  en false, changes vacío y explicá qué información falta.
 - Cuando hallazgos_researcher indique evidence_sufficient=true y
-  requirements_clear=true, y ya hayas leído los archivos directamente
-  involucrados, aplicá el cambio. No sigas explorando archivos secundarios.
+  requirements_clear=true, y ya hayas leído los archivos involucrados,
+  aplicá el cambio. No sigas explorando archivos secundarios.
 - Para tareas pequeñas y localizadas, no uses más de seis llamadas de
   lectura o listado antes del primer write_file.
-- Priorizá actuar. Un plan de lo que harías, sin haber llamado a write_file,
-  no es una implementación válida.
+- Priorizá actuar. Un plan sin llamadas reales a write_file no es una
+  implementación válida.
 - Si el pedido exige tests, la tarea no está completa hasta que hayas creado
   o modificado un archivo .spec o .test que compruebe explícitamente el
   comportamiento solicitado.
-- No respondas con el JSON final después de modificar solamente el código
-  productivo cuando el pedido también exige tests.
+- No finalices después de modificar solamente el código productivo cuando el
+  pedido también exige tests.
+- Los archivos de tests deben ubicarse en paths confirmados por la estructura
+  inspeccionada. Preferí modificar un spec existente leído o crear un spec
+  junto al archivo productivo que se está probando.
 - No afirmes que faltan herramientas cuando write_file o run_command están
-  disponibles. Si decidís no actuar, explicá la incertidumbre concreta.
+  disponibles.
 - En pedidos destructivos con términos indefinidos como "viejos",
   "automáticamente" o "eliminar", no elijas valores arbitrarios.
 - Usá run_command solamente cuando sea necesario para completar la
@@ -131,6 +139,7 @@ escritura. No sigas leyendo archivos secundarios ni describas solamente un
 plan.
 
 En esta iteración debés usar write_file para aplicar el primer cambio real.
+
 El contenido enviado a write_file debe representar el archivo completo y
 debe conservar todo lo que no corresponda modificar.
 """
@@ -139,15 +148,14 @@ debe conservar todo lo que no corresponda modificar.
 AVISO DEL SISTEMA: el pedido original exige agregar o actualizar tests, pero
 durante esta ejecución todavía no modificaste ningún archivo de test.
 
-Ya aplicaste al menos un cambio de implementación. Ahora debés usar
-write_file para crear o actualizar un archivo .spec o .test que compruebe
-explícitamente el comportamiento solicitado.
+Ya aplicaste al menos un cambio productivo. Ahora debés usar write_file para
+crear o actualizar un archivo .spec o .test que compruebe explícitamente el
+comportamiento solicitado.
 
 No vuelvas a modificar solamente el archivo productivo y no respondas con
 el JSON final hasta haber aplicado los tests requeridos.
 
-Si vas a crear un archivo nuevo, usá un path coherente con la estructura que
-ya inspeccionaste y escribí el contenido completo del nuevo archivo.
+Solo podés usar los paths de test confirmados que aparecen debajo.
 """
 
     FINAL_ITERATION_REMINDER = """
@@ -191,7 +199,9 @@ incompleta.
         client = get_client()
         task_state.set_phase("implementation")
 
-        explorer_result = task_state.last_result_of("explorer")
+        explorer_result = task_state.last_result_of(
+            "explorer"
+        )
 
         if explorer_result is None:
             task_state.status = "needs_help"
@@ -217,6 +227,7 @@ incompleta.
         researcher_result = task_state.last_result_of(
             "researcher"
         )
+
         tester_result = task_state.last_result_of(
             "tester"
         )
@@ -228,7 +239,9 @@ incompleta.
         )
 
         evidence_sufficient = (
-            researcher_data.get("evidence_sufficient")
+            researcher_data.get(
+                "evidence_sufficient"
+            )
             is True
         )
 
@@ -310,8 +323,12 @@ incompleta.
         successful_reads = 0
         discovery_calls = 0
 
-        # Registra solamente las escrituras realizadas durante esta
-        # ejecución particular del Implementer.
+        # Registra exclusivamente los archivos leídos durante esta
+        # ejecución del Implementer.
+        read_files_this_run: Set[str] = set()
+
+        # Registra exclusivamente las escrituras realizadas durante esta
+        # ejecución del Implementer.
         written_files_this_run: Set[str] = set()
 
         action_reminder_sent = False
@@ -327,6 +344,12 @@ incompleta.
 
             test_file_written = self._has_test_file(
                 written_files_this_run
+            )
+
+            preferred_test_paths = (
+                self._preferred_test_paths(
+                    read_files_this_run
+                )
             )
 
             exceeded_discovery_limit = (
@@ -379,7 +402,9 @@ incompleta.
                 messages.append({
                     "role": "user",
                     "content": (
-                        self.TESTS_REQUIRED_REMINDER
+                        self._build_tests_reminder(
+                            preferred_test_paths
+                        )
                     ),
                 })
 
@@ -433,6 +458,12 @@ incompleta.
                     )
                 )
 
+                preferred_test_paths = (
+                    self._preferred_test_paths(
+                        read_files_this_run
+                    )
+                )
+
                 missing_required_tests = bool(
                     safe_to_implement
                     and tests_required
@@ -440,9 +471,8 @@ incompleta.
                     and not test_file_written
                 )
 
-                # No permite que el modelo termine después de escribir
-                # solamente el código productivo cuando también se
-                # solicitaron tests.
+                # No permite finalizar después de escribir solamente
+                # código productivo cuando también se solicitaron tests.
                 if (
                     missing_required_tests
                     and not is_last_iteration
@@ -451,27 +481,16 @@ incompleta.
                         assistant_message
                     )
 
-                    if not tests_reminder_sent:
-                        messages.append({
-                            "role": "user",
-                            "content": (
-                                self.TESTS_REQUIRED_REMINDER
-                            ),
-                        })
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            self._build_tests_reminder(
+                                preferred_test_paths
+                            )
+                        ),
+                    })
 
-                        tests_reminder_sent = True
-
-                    else:
-                        messages.append({
-                            "role": "user",
-                            "content": (
-                                "Todavía faltan los tests "
-                                "solicitados. Usá write_file "
-                                "para agregarlos antes de "
-                                "finalizar."
-                            ),
-                        })
-
+                    tests_reminder_sent = True
                     continue
 
                 task_state.record_iterations(
@@ -531,6 +550,78 @@ incompleta.
 
                     continue
 
+                proposed_path = (
+                    self._normalize_written_path(
+                        path_value=tool_args.get(
+                            "path",
+                            "",
+                        ),
+                        workspace_path=(
+                            task_state.workspace_path
+                        ),
+                    )
+                )
+
+                writing_test_phase = bool(
+                    safe_to_implement
+                    and tests_required
+                    and bool(written_files_this_run)
+                    and not self._has_test_file(
+                        written_files_this_run
+                    )
+                )
+
+                forced_test_path_error = None
+
+                # Cuando el agente ya está en la fase de tests:
+                # - cualquier propuesta que parezca un test se valida;
+                # - si el test es obligatorio en esta iteración, el path
+                #   debe ser obligatoriamente un test permitido.
+                should_validate_test_path = bool(
+                    tool_name == "write_file"
+                    and writing_test_phase
+                    and (
+                        must_write_tests_now
+                        or self._is_test_file(
+                            proposed_path
+                        )
+                    )
+                )
+
+                if should_validate_test_path:
+                    forced_test_path_error = (
+                        self._validate_forced_test_path(
+                            proposed_path=proposed_path,
+                            preferred_paths=(
+                                preferred_test_paths
+                            ),
+                        )
+                    )
+
+                if forced_test_path_error:
+                    task_state.record_tool_call(
+                        subagent="implementer",
+                        tool_name=tool_name,
+                        args=tool_args,
+                        outcome=(
+                            "blocked_invalid_test_path"
+                        ),
+                    )
+
+                    task_state.record_observation(
+                        forced_test_path_error
+                    )
+
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": (
+                            forced_test_path_error
+                        ),
+                    })
+
+                    continue
+
                 if task_state.is_repeating(
                     subagent="implementer",
                     tool_name=tool_name,
@@ -568,10 +659,14 @@ incompleta.
                         )
                     )
 
-                tool_result_text = str(tool_result)
+                tool_result_text = str(
+                    tool_result
+                )
 
                 tool_failed = (
-                    tool_result_text.startswith("Error")
+                    tool_result_text.startswith(
+                        "Error"
+                    )
                     or tool_result_text.startswith(
                         "POLICY_BLOCKED"
                     )
@@ -598,6 +693,23 @@ incompleta.
                     and tool_name == "read_file"
                 ):
                     successful_reads += 1
+
+                    read_path = (
+                        self._normalize_written_path(
+                            path_value=tool_args.get(
+                                "path",
+                                "",
+                            ),
+                            workspace_path=(
+                                task_state.workspace_path
+                            ),
+                        )
+                    )
+
+                    if read_path:
+                        read_files_this_run.add(
+                            read_path
+                        )
 
                 write_succeeded = bool(
                     tool_name == "write_file"
@@ -646,8 +758,8 @@ incompleta.
                 {
                     "evidence_sufficient": False,
                     "summary": (
-                        "El Implementer alcanzó el límite "
-                        "de iteraciones."
+                        "El Implementer alcanzó el "
+                        "límite de iteraciones."
                     ),
                     "changes": [],
                     "risks_or_notes": [
@@ -668,6 +780,117 @@ incompleta.
         )
 
     @classmethod
+    def _build_tests_reminder(
+        cls,
+        preferred_paths: Set[str],
+    ) -> str:
+        reminder = cls.TESTS_REQUIRED_REMINDER
+
+        if preferred_paths:
+            reminder += (
+                "\n\nPaths de test confirmados y "
+                "permitidos para esta ejecución:\n- "
+                + "\n- ".join(
+                    sorted(preferred_paths)
+                )
+            )
+
+        else:
+            reminder += (
+                "\n\nTodavía no hay paths de test "
+                "confirmados. Leé un archivo de test "
+                "existente o el archivo DTO que será "
+                "probado antes de intentar escribir."
+            )
+
+        return reminder
+
+    @classmethod
+    def _preferred_test_paths(
+        cls,
+        read_files: Set[str],
+    ) -> Set[str]:
+        """
+        Construye paths de tests seguros utilizando únicamente
+        archivos confirmados mediante read_file.
+
+        Permite:
+        - modificar un test existente que haya sido leído;
+        - crear un spec junto a un DTO que haya sido leído.
+        """
+
+        candidates: Set[str] = set()
+
+        for path in read_files:
+            normalized = (
+                str(path)
+                .replace("\\", "/")
+                .strip("/")
+            )
+
+            if cls._is_test_file(normalized):
+                candidates.add(normalized)
+                continue
+
+            if (
+                "/dto/" in f"/{normalized}"
+                and normalized.endswith(".dto.ts")
+            ):
+                candidates.add(
+                    normalized[:-3] + ".spec.ts"
+                )
+
+        return candidates
+
+    @classmethod
+    def _validate_forced_test_path(
+        cls,
+        *,
+        proposed_path: str,
+        preferred_paths: Set[str],
+    ) -> Optional[str]:
+        """
+        Valida que el path de test propuesto haya sido confirmado
+        por la inspección actual del repositorio.
+        """
+
+        normalized = (
+            str(proposed_path)
+            .replace("\\", "/")
+            .strip("/")
+        )
+
+        if not cls._is_test_file(normalized):
+            return (
+                "Error: en esta iteración se requiere "
+                "escribir tests, pero "
+                f"'{normalized}' no es un archivo "
+                ".spec o .test."
+            )
+
+        if not preferred_paths:
+            return (
+                "Error: no hay ningún path de test "
+                "confirmado. Leé un archivo de test "
+                "existente o el DTO que debe probarse "
+                "antes de usar write_file."
+            )
+
+        if normalized not in preferred_paths:
+            allowed = ", ".join(
+                sorted(preferred_paths)
+            )
+
+            return (
+                "Error: el path propuesto para los "
+                "tests no fue confirmado por la "
+                "inspección actual del repositorio. "
+                f"Usá uno de estos paths: {allowed}"
+            )
+
+        return None
+
+    @classmethod
     def _has_test_file(
         cls,
         paths: Set[str],
@@ -686,9 +909,13 @@ incompleta.
             str(path)
             .replace("\\", "/")
             .lower()
+            .strip("/")
         )
 
-        filename = normalized.rsplit("/", 1)[-1]
+        filename = normalized.rsplit(
+            "/",
+            1,
+        )[-1]
 
         return bool(
             filename.endswith(
@@ -707,8 +934,8 @@ incompleta.
         workspace_path: str,
     ) -> str:
         """
-        Convierte el path utilizado en write_file a un path relativo al
-        workspace para mostrarlo y compararlo de forma consistente.
+        Convierte el path usado por una tool en un path relativo
+        al workspace para mostrarlo y compararlo consistentemente.
         """
 
         if (
@@ -752,7 +979,9 @@ incompleta.
         tests_required: bool,
     ) -> SubagentResult:
         try:
-            data = json.loads(content or "")
+            data = json.loads(
+                content or ""
+            )
 
         except (
             json.JSONDecodeError,
@@ -787,8 +1016,10 @@ incompleta.
             written_files_this_run
         )
 
-        test_file_written = cls._has_test_file(
-            actual_modified_files
+        test_file_written = (
+            cls._has_test_file(
+                actual_modified_files
+            )
         )
 
         notes = data.get(
@@ -807,8 +1038,6 @@ incompleta.
         if not isinstance(changes, list):
             changes = []
 
-        # Asegura que todos los archivos realmente escritos aparezcan
-        # también en la declaración de cambios.
         declared_files = {
             change.get("file")
             for change in changes
@@ -819,7 +1048,11 @@ incompleta.
             )
         }
 
-        for path in sorted(actual_modified_files):
+        # Incorpora en la declaración todos los archivos
+        # efectivamente escritos.
+        for path in sorted(
+            actual_modified_files
+        ):
             if path not in declared_files:
                 changes.append({
                     "file": path,
@@ -843,7 +1076,9 @@ incompleta.
             )
 
             if no_write_note not in notes:
-                notes.append(no_write_note)
+                notes.append(
+                    no_write_note
+                )
 
         elif not safe_to_implement:
             data["evidence_sufficient"] = False
@@ -856,15 +1091,20 @@ incompleta.
             )
 
             if unsafe_note not in notes:
-                notes.append(unsafe_note)
+                notes.append(
+                    unsafe_note
+                )
 
-        elif tests_required and not test_file_written:
+        elif (
+            tests_required
+            and not test_file_written
+        ):
             data["evidence_sufficient"] = False
 
             missing_tests_note = (
                 "La implementación quedó incompleta "
-                "porque el pedido exigía tests y no se "
-                "modificó ningún archivo de test."
+                "porque el pedido exigía tests y no "
+                "se modificó ningún archivo de test."
             )
 
             if missing_tests_note not in notes:
@@ -875,15 +1115,15 @@ incompleta.
             data["summary"] = (
                 "Se aplicaron cambios parciales en "
                 + ", ".join(
-                    sorted(actual_modified_files)
+                    sorted(
+                        actual_modified_files
+                    )
                 )
                 + ", pero faltaron los tests "
                 "solicitados."
             )
 
         else:
-            # La evidencia era suficiente y todos los cambios requeridos
-            # fueron escritos realmente.
             data["evidence_sufficient"] = True
 
             summary = data.get(
@@ -908,7 +1148,9 @@ incompleta.
                 data["summary"] = (
                     "Se aplicaron cambios reales en "
                     + ", ".join(
-                        sorted(actual_modified_files)
+                        sorted(
+                            actual_modified_files
+                        )
                     )
                     + "."
                 )
