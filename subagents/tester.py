@@ -95,6 +95,57 @@ class Tester:
             sources=["repository"],
         )
 
+        @staticmethod
+        def _failure_detail(
+            check: dict,
+        ) -> str:
+            """
+            Devuelve el detalle útil de un check fallido.
+
+            Algunas herramientas, como ESLint, escriben los errores
+            en stdout en lugar de stderr. Por eso se conservan ambos.
+            """
+
+            stdout = str(
+                check.get(
+                    "stdout",
+                    "",
+                )
+            ).strip()
+
+            stderr = str(
+                check.get(
+                    "stderr",
+                    "",
+                )
+            ).strip()
+
+            details: list[str] = []
+
+            if stdout:
+                details.append(
+                    "STDOUT:\n" + stdout
+                )
+
+            if (
+                stderr
+                and stderr != stdout
+            ):
+                details.append(
+                    "STDERR:\n" + stderr
+                )
+
+            if not details:
+                details.append(
+                    "El comando terminó con código "
+                    f"{check.get('return_code')} "
+                    "sin producir stdout ni stderr."
+                )
+
+            return "\n\n".join(
+                details
+            )[-6000:]
+
     def _resolve_commands(
         self,
         task_state: TaskState,
