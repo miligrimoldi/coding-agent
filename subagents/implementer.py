@@ -1008,85 +1008,85 @@ incompleta.
         except (OSError, ValueError):
             return str(path_value)
 
-@staticmethod
-def _build_tester_feedback(
-    tester_result: Optional[SubagentResult],
-) -> Optional[dict]:
-    if tester_result is None:
-        return None
+    @staticmethod
+    def _build_tester_feedback(
+        tester_result: Optional[SubagentResult],
+    ) -> Optional[dict]:
+        if tester_result is None:
+            return None
 
-    tester_data = tester_result.data
+        tester_data = tester_result.data
 
-    if not isinstance(
-        tester_data,
-        dict,
-    ):
-        return None
+        if not isinstance(
+            tester_data,
+            dict,
+        ):
+            return None
 
-    failed_checks = tester_data.get(
-        "failed_checks",
-        [],
-    )
-
-    # Compatibilidad con resultados anteriores que todavía
-    # no tengan el campo failed_checks.
-    if not isinstance(
-        failed_checks,
-        list,
-    ) or not failed_checks:
-        failed_checks = []
-
-        checks = tester_data.get(
-            "checks",
+        failed_checks = tester_data.get(
+            "failed_checks",
             [],
         )
 
-        if isinstance(checks, list):
-            for check in checks:
-                if (
-                    not isinstance(check, dict)
-                    or check.get("ok") is True
-                ):
-                    continue
+        # Compatibilidad con resultados anteriores que todavía
+        # no tengan el campo failed_checks.
+        if not isinstance(
+            failed_checks,
+            list,
+        ) or not failed_checks:
+            failed_checks = []
 
-                stdout = str(
-                    check.get("stdout", "")
-                ).strip()
-
-                stderr = str(
-                    check.get("stderr", "")
-                ).strip()
-
-                error_parts = [
-                    part
-                    for part in (
-                        stdout,
-                        stderr,
-                    )
-                    if part
-                ]
-
-                failed_checks.append({
-                    "command": check.get(
-                        "command"
-                    ),
-                    "return_code": check.get(
-                        "return_code"
-                    ),
-                    "error": "\n".join(
-                        error_parts
-                    )[-6000:],
-                })
-
-    return {
-        "all_passed": bool(
-            tester_data.get(
-                "all_passed",
-                False,
+            checks = tester_data.get(
+                "checks",
+                [],
             )
-        ),
-        "failed_checks": failed_checks,
-    }
+
+            if isinstance(checks, list):
+                for check in checks:
+                    if (
+                        not isinstance(check, dict)
+                        or check.get("ok") is True
+                    ):
+                        continue
+
+                    stdout = str(
+                        check.get("stdout", "")
+                    ).strip()
+
+                    stderr = str(
+                        check.get("stderr", "")
+                    ).strip()
+
+                    error_parts = [
+                        part
+                        for part in (
+                            stdout,
+                            stderr,
+                        )
+                        if part
+                    ]
+
+                    failed_checks.append({
+                        "command": check.get(
+                            "command"
+                        ),
+                        "return_code": check.get(
+                            "return_code"
+                        ),
+                        "error": "\n".join(
+                            error_parts
+                        )[-6000:],
+                    })
+
+        return {
+            "all_passed": bool(
+                tester_data.get(
+                    "all_passed",
+                    False,
+                )
+            ),
+            "failed_checks": failed_checks,
+        }
 
     @classmethod
     def _finalize(
