@@ -1,6 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 
-import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { FindTicketsDto } from './dto/find-tickets.dto';
@@ -19,14 +18,17 @@ export class TicketsService {
   }
 
   async findAll(findTicketsDto?: FindTicketsDto) {
-    const where: Prisma.TicketWhereInput = {};
-
+    // If a status filter is provided, apply where clause; otherwise return all ordered by createdAt
     if (findTicketsDto?.status !== undefined) {
-      where.status = findTicketsDto.status;
+      return this.prisma.ticket.findMany({
+        where: { status: findTicketsDto.status },
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
     }
 
     return this.prisma.ticket.findMany({
-      where: where.status ? where : undefined,
       orderBy: {
         createdAt: 'desc',
       },

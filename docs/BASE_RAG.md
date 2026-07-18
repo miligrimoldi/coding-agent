@@ -43,12 +43,15 @@ frontmatter YAML.
 | `nestjs/validation.md` | `nestjs` | [NestJS: Validation](https://docs.nestjs.com/techniques/validation) |
 | `prisma/filtering.md` | `prisma` | [Prisma: Filtering and sorting](https://www.prisma.io/docs/orm/prisma-client/queries/filtering-and-sorting) |
 | `prisma/migrations.md` | `prisma` | [Prisma Migrate](https://www.prisma.io/docs/orm/prisma-migrate) |
+| `jest/testing-and-linting.md` | `jest` | Guía interna curada: `internal://jest/testing-and-linting` |
 
-La base inicial contiene **3 documentos y 9 chunks**.
+La base actual contiene **4 documentos y 14 chunks**.
 
-Actualmente no se incluyó documentación local de Jest de forma deliberada.
-Esto permite demostrar el fallback web cuando una tarea requiere evidencia de
-testing que no está cubierta por el RAG.
+La documentación local de Jest fue agregada después de las primeras pruebas del
+pipeline. Esas ejecuciones mostraron que, aunque el agente podía generar tests
+funcionales, todavía necesitaba evidencia más específica para evitar casts
+inseguros como `as any`, conservar los tests existentes y producir archivos
+compatibles con ESLint y Prettier.
 
 ## Formato de los documentos
 
@@ -343,10 +346,19 @@ Por ejemplo:
 - Prisma se activa cuando el repositorio usa Prisma y el pedido se relaciona
   con persistencia, schema, filtros, migraciones o eliminación;
 - Jest se activa cuando el proyecto utiliza Jest y el pedido menciona tests,
-  pruebas, specs o e2e.
+  pruebas, specs o e2e;
+- además, la presencia de archivos relevantes con `.spec.` o `.test.` permite
+  detectar Jest incluso cuando el Explorer no logró completar correctamente la
+  lista de dependencias.
+
+Esta última regla fue agregada después de observar que algunas exploraciones
+identificaban el archivo de test pero devolvían una lista de dependencias vacía.
+Con esta mejora, el Researcher puede seguir recuperando la guía local de testing
+y linting a partir de la evidencia estructural del repositorio.
 
 Esto evita consultar documentación de Prisma o Jest en tareas que no la
-necesitan.
+necesitan y, al mismo tiempo, reduce falsos negativos en tareas claramente
+orientadas a pruebas.
 
 ### Consulta por ecosistema
 
