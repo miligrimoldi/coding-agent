@@ -1099,31 +1099,59 @@ Formato:
                 "prisma"
             )
 
-        uses_jest = any(
-            "jest" in dependency
-            for dependency in dependencies
-        )
+                has_test_files = any(
+                    (
+                        ".spec." in path
+                        or ".test." in path
+                        or path.startswith("test/")
+                        or "/test/" in f"/{path}"
+                        or path.startswith("tests/")
+                        or "/tests/" in f"/{path}"
+                    )
+                    for path in relevant_files
+                )
 
-        testing_terms = (
-            "test",
-            "tests",
-            "testing",
-            "prueba",
-            "pruebas",
-            "e2e",
-            "spec",
-        )
+                uses_jest = bool(
+                    any(
+                        (
+                            "jest" in dependency
+                            or "@nestjs/testing"
+                            in dependency
+                        )
+                        for dependency in dependencies
+                    )
+                    or has_test_files
+                )
 
-        if (
-            uses_jest
-            and any(
-                term in request
-                for term in testing_terms
-            )
-        ):
-            ecosystems.append(
-                "jest"
-            )
+                testing_terms = (
+                    "test",
+                    "tests",
+                    "testing",
+                    "prueba",
+                    "pruebas",
+                    "e2e",
+                    "spec",
+                    "coverage",
+                    "cobertura",
+                    "mock",
+                    "mocks",
+                )
+
+                has_testing_request = any(
+                    term in request
+                    for term in testing_terms
+                )
+
+                if (
+                    uses_jest
+                    and (
+                        has_testing_request
+                        or has_test_files
+                    )
+                ):
+                    ecosystems.append(
+                        "jest"
+                    )
 
         return list(
             dict.fromkeys(
