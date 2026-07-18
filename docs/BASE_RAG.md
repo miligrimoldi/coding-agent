@@ -45,7 +45,7 @@ frontmatter YAML.
 | `prisma/migrations.md` | `prisma` | [Prisma Migrate](https://www.prisma.io/docs/orm/prisma-migrate) |
 | `jest/testing-and-linting.md` | `jest` | Guía interna curada: `internal://jest/testing-and-linting` |
 
-La base actual contiene **4 documentos y 14 chunks**.
+La base actual contiene **4 documentos y 15 chunks**.
 
 La documentación local de Jest fue agregada después de las primeras pruebas del
 pipeline. Esas ejecuciones mostraron que, aunque el agente podía generar tests
@@ -136,10 +136,10 @@ La ingesta devuelve un resumen como:
 
 ```json
 {
-  "documents_loaded": 3,
-  "chunks_generated": 9,
-  "chunks_processed": 9,
-  "collection_count": 9,
+  "documents_loaded": 4,
+  "chunks_generated": 15,
+  "chunks_processed": 15,
+  "collection_count": 15,
   "sources": []
 }
 ```

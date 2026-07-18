@@ -886,10 +886,16 @@ El fingerprint considera:
 
 - comando;
 - return code;
-- stderr normalizado.
+- si el comando dio timeout;
+- stdout **y** stderr combinados (herramientas como ESLint a veces escriben
+  sus errores en stdout, no solo en stderr).
 
-Se eliminan números variables para evitar que cambios de línea o valores
-incidentales hagan parecer distinto el mismo error.
+Sobre ese texto combinado, solo se normalizan los pares línea:columna
+(`123:45` → `<line:column>`) y se colapsan espacios repetidos — se
+conservan otros números relevantes, como la cantidad de errores
+reportados, para no confundir un error genuinamente distinto con el mismo
+error en otra línea. El resultado se recorta a los últimos 6000
+caracteres por check antes de hashear.
 
 Si dos intentos consecutivos fallan de la misma forma:
 
