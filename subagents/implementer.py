@@ -100,6 +100,8 @@ Reglas:
 - Si el pedido exige tests, la tarea no está completa hasta que hayas creado
   o modificado un archivo .spec o .test que compruebe explícitamente el
   comportamiento solicitado.
+  - No ejecutes los checks generales de build, lint o test. Esa responsabilidad
+    pertenece al Tester.
 - - Los hallazgos del Researcher y la documentación recuperada mediante RAG
     son instrucciones técnicas obligatorias para la implementación. No los
     trates como sugerencias opcionales.
@@ -201,6 +203,13 @@ Antes de escribir:
 - no ocultes errores mediante casts inseguros, `as any`,
   comentarios eslint-disable o cambios en la configuración;
 - no modifiques archivos ajenos al error salvo que exista evidencia clara.
+- Si el Tester informa únicamente errores `prettier/prettier`,
+  no intentes adivinar manualmente todos los saltos de línea.
+- Usá run_command para ejecutar ESLint con `--fix` únicamente sobre
+  el archivo afectado. Por ejemplo:
+  `npx eslint src/tickets/tickets.service.spec.ts --fix`.
+- Después del autofix, leé nuevamente el archivo para conservar
+  exactamente el contenido formateado antes de finalizar.
 
 La nueva escritura debe corregir concretamente el feedback incluido debajo.
 """
@@ -692,11 +701,22 @@ incompleta.
 
                     continue
 
-                if task_state.is_repeating(
-                    subagent="implementer",
-                    tool_name=tool_name,
-                    args=tool_args,
-                    threshold=self.REPEAT_THRESHOLD,
+                repeat_guard_applies = (
+                    tool_name
+                    not in {
+                        "read_file",
+                        "list_files",
+                    }
+                )
+
+                if (
+                    repeat_guard_applies
+                    and task_state.is_repeating(
+                        subagent="implementer",
+                        tool_name=tool_name,
+                        args=tool_args,
+                        threshold=self.REPEAT_THRESHOLD,
+                    )
                 ):
                     task_state.record_tool_call(
                         subagent="implementer",
