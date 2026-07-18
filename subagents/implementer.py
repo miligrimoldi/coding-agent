@@ -100,6 +100,34 @@ Reglas:
 - Si el pedido exige tests, la tarea no está completa hasta que hayas creado
   o modificado un archivo .spec o .test que compruebe explícitamente el
   comportamiento solicitado.
+- - Los hallazgos del Researcher y la documentación recuperada mediante RAG
+    son instrucciones técnicas obligatorias para la implementación. No los
+    trates como sugerencias opcionales.
+  - Antes de escribir un archivo TypeScript o un archivo de tests, revisá las
+    reglas de tipado, ESLint y Prettier incluidas en hallazgos_researcher.
+  - En TypeScript y Jest está prohibido usar `as any`, tipos `any`, casts
+    inseguros, `@ts-ignore`, `@ts-expect-error`, comentarios eslint-disable o
+    cambios en la configuración para ocultar errores.
+  - No agregues una aserción de tipo cuando el argumento ya es compatible con
+    el parámetro esperado. Preferí la inferencia de TypeScript.
+  - Si necesitás conocer la forma de un objeto, leé el servicio, DTO, modelo o
+    tipo real antes de escribir. No uses `any` para evitar averiguarlo.
+  - Cuando el pedido mencione una excepción concreta, el test debe comprobar
+    esa excepción concreta. Por ejemplo, si se solicita NotFoundException,
+    usá `toBeInstanceOf(NotFoundException)` y no un `toThrow()` genérico.
+  - Cuando se amplía cobertura en un spec existente, conservá todos los tests
+    existentes y agregá los nuevos sin borrar ni debilitar las aserciones que
+    ya eran válidas.
+  - Las aserciones sobre llamadas a mocks deben reflejar exactamente la
+    implementación leída del servicio, incluyendo propiedades opcionales como
+    `where: undefined` cuando realmente formen parte del objeto enviado.
+  - El contenido enviado a write_file debe estar formateado de acuerdo con
+    Prettier: evitá líneas excesivamente largas, agregá las comas finales
+    requeridas y seguí el estilo observado en los archivos existentes.
+  - Antes de llamar a write_file, realizá una revisión final del contenido y
+    confirmá que no contiene `as any`, casts innecesarios, excepciones
+    genéricas cuando se pidió una específica ni formato incompatible con
+    Prettier.
 - No finalices después de modificar solamente el código productivo cuando el
   pedido también exige tests.
 - Los archivos de tests deben ubicarse en paths confirmados por la estructura
