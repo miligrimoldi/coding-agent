@@ -36,4 +36,10 @@ export default tseslint.config(
       "prettier/prettier": ["error", { endOfLine: "auto" }],
     },
   },
+    {
+        files: ['**/*.spec.ts', '**/*.test.ts'],
+        rules: {
+            '@typescript-eslint/no-explicit-any': 'warn',
+        },
+    },
 );
