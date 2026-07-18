@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Optional
@@ -22,8 +23,12 @@ from subagents.subagent_protocol import (
 )
 
 
-_DIGITS_PATTERN = re.compile(
-    r"\d+"
+_LINE_COLUMN_PATTERN = re.compile(
+    r"\b\d+:\d+\b"
+)
+
+_WHITESPACE_PATTERN = re.compile(
+    r"\s+"
 )
 
 
@@ -176,37 +181,88 @@ class Orchestrator:
     def _fingerprint_failures(
         failing_checks: list[dict],
     ) -> Optional[str]:
+        """
+        Construye una firma de los errores reales del Tester.
+
+        Incluye stdout y stderr porque herramientas como ESLint
+        suelen escribir sus errores en stdout.
+
+        Solo normaliza números de línea y columna. Conserva otros
+        números relevantes, como la cantidad de errores reportados.
+        """
+
         if not failing_checks:
             return None
 
-        parts = []
+        normalized_checks: list[dict] = []
 
         for check in sorted(
             failing_checks,
-            key=lambda item: item[
-                "command"
-            ],
+            key=lambda item: str(
+                item.get("command", "")
+            ),
         ):
-            normalized_stderr = (
-                _DIGITS_PATTERN.sub(
-                    "#",
-                    check.get(
-                        "stderr",
-                        "",
-                    ),
-                )[:300]
+            stdout = str(
+                check.get("stdout", "")
+            ).strip()
+
+            stderr = str(
+                check.get("stderr", "")
+            ).strip()
+
+            output_parts: list[str] = []
+
+            if stdout:
+                output_parts.append(stdout)
+
+            if stderr and stderr != stdout:
+                output_parts.append(stderr)
+
+            combined_output = "\n".join(
+                output_parts
             )
 
-            parts.append(
-                f"{check['command']}|"
-                f"{check.get('return_code')}|"
-                f"{normalized_stderr}"
+            normalized_output = (
+                _LINE_COLUMN_PATTERN.sub(
+                    "<line:column>",
+                    combined_output,
+                )
             )
+
+            normalized_output = (
+                _WHITESPACE_PATTERN.sub(
+                    " ",
+                    normalized_output,
+                ).strip()
+            )
+
+            normalized_checks.append({
+                "command": check.get(
+                    "command",
+                    "",
+                ),
+                "return_code": check.get(
+                    "return_code",
+                ),
+                "timed_out": bool(
+                    check.get(
+                        "timed_out",
+                        False,
+                    )
+                ),
+                "output": normalized_output[
+                    -6000:
+                ],
+            })
+
+        serialized = json.dumps(
+            normalized_checks,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
 
         return hashlib.sha256(
-            "\n".join(
-                parts
-            ).encode("utf-8")
+            serialized.encode("utf-8")
         ).hexdigest()
 
     def _run_implement_and_test_cycle(
@@ -398,6 +454,20 @@ class Orchestrator:
                     failing_checks
                 )
             )
+
+            if (
+                previous_fingerprint is not None
+                and fingerprint is not None
+                and fingerprint
+                != previous_fingerprint
+            ):
+                task_state.log(
+                    "El Tester continúa reportando "
+                    "fallas, pero el detalle cambió "
+                    "respecto del intento anterior. "
+                    "Se considera que hubo progreso "
+                    "y se permite otro reintento."
+                )
 
             if (
                 fingerprint is not None

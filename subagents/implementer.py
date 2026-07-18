@@ -158,6 +158,25 @@ el JSON final hasta haber aplicado los tests requeridos.
 Solo podés usar los paths de test confirmados que aparecen debajo.
 """
 
+    RETRY_CORRECTION_REMINDER = """
+AVISO DEL SISTEMA: esta ejecución es un reintento porque el Tester
+reportó uno o más checks fallidos.
+
+Los errores del Tester son evidencia autoritativa.
+
+Antes de escribir:
+- leé el contenido actual del archivo afectado;
+- identificá todos los errores informados;
+- corregí todos los checks fallidos, no solamente el primero;
+- conservá el comportamiento que ya pasó build o tests;
+- no repitas exactamente el cambio anterior;
+- no ocultes errores mediante casts inseguros, `as any`,
+  comentarios eslint-disable o cambios en la configuración;
+- no modifiques archivos ajenos al error salvo que exista evidencia clara.
+
+La nueva escritura debe corregir concretamente el feedback incluido debajo.
+"""
+
     FINAL_ITERATION_REMINDER = """
 AVISO DEL SISTEMA: esta es la última iteración disponible. Ya no podés usar
 tools ni llamar a write_file.
@@ -232,6 +251,12 @@ incompleta.
             "tester"
         )
 
+        tester_feedback = (
+            self._build_tester_feedback(
+                tester_result
+            )
+        )
+
         researcher_data = (
             researcher_result.data
             if researcher_result
@@ -294,9 +319,7 @@ incompleta.
                 else None
             ),
             "resultado_tester_previo": (
-                tester_result.data
-                if tester_result
-                else None
+                tester_feedback
             ),
             "memoria_previa_del_proyecto": (
                 memory.as_context()
@@ -965,6 +988,86 @@ incompleta.
 
         except (OSError, ValueError):
             return str(path_value)
+
+        @staticmethod
+        def _build_tester_feedback(
+            tester_result: Optional[SubagentResult],
+        ) -> Optional[dict]:
+            if tester_result is None:
+                return None
+
+            tester_data = tester_result.data
+
+            if not isinstance(
+                tester_data,
+                dict,
+            ):
+                return None
+
+            failed_checks = tester_data.get(
+                "failed_checks",
+                [],
+            )
+
+            # Compatibilidad con resultados anteriores que todavía
+            # no tengan el campo failed_checks.
+            if not isinstance(
+                failed_checks,
+                list,
+            ) or not failed_checks:
+                failed_checks = []
+
+                checks = tester_data.get(
+                    "checks",
+                    [],
+                )
+
+                if isinstance(checks, list):
+                    for check in checks:
+                        if (
+                            not isinstance(check, dict)
+                            or check.get("ok") is True
+                        ):
+                            continue
+
+                        stdout = str(
+                            check.get("stdout", "")
+                        ).strip()
+
+                        stderr = str(
+                            check.get("stderr", "")
+                        ).strip()
+
+                        error_parts = [
+                            part
+                            for part in (
+                                stdout,
+                                stderr,
+                            )
+                            if part
+                        ]
+
+                        failed_checks.append({
+                            "command": check.get(
+                                "command"
+                            ),
+                            "return_code": check.get(
+                                "return_code"
+                            ),
+                            "error": "\n".join(
+                                error_parts
+                            )[-6000:],
+                        })
+
+            return {
+                "all_passed": bool(
+                    tester_data.get(
+                        "all_passed",
+                        False,
+                    )
+                ),
+                "failed_checks": failed_checks,
+            }
 
     @classmethod
     def _finalize(

@@ -18,7 +18,7 @@ corriendo build/lint/tests contra el proyecto de verdad.
   principal, de cada subagente, y estructura del estado compartido.
 - [`docs/CASO_DE_USO.md`](docs/CASO_DE_USO.md) — ecosistema elegido,
   repositorio objetivo, objetivo concreto y criterio de éxito.
-- [`docs/RAG.md`](docs/RAG.md) — fuentes, estrategia de chunking,
+- [`docs/RAG.md`](docs/BASE_RAG.md) — fuentes, estrategia de chunking,
   embeddings y almacenamiento vectorial.
 - [`docs/EVIDENCIA.md`](docs/EVIDENCIA.md) — tareas reales ejecutadas, con
   output, fuentes recuperadas y qué se observa en cada caso.

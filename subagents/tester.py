@@ -54,12 +54,29 @@ class Tester:
             if result["ok"]:
                 validated_commands[key] = command
             else:
+                failure_detail = self._failure_detail(
+                    result
+                )
+
                 task_state.record_observation(
-                    f"Tester: falló '{command}'. "
-                    f"Error: {result['stderr']}"
+                    f"Tester: falló '{command}'.\n"
+                    f"{failure_detail}"
                 )
 
         all_passed = all(check["ok"] for check in checks)
+
+        failed_checks = [
+            {
+                "command": check["command"],
+                "return_code": check["return_code"],
+                "timed_out": check["timed_out"],
+                "error": self._failure_detail(
+                    check
+                ),
+            }
+            for check in checks
+            if not check["ok"]
+        ]
 
         return SubagentResult(
             subagent="tester",
@@ -71,6 +88,7 @@ class Tester:
             data={
                 "all_passed": all_passed,
                 "checks": checks,
+                "failed_checks": failed_checks,
                 "commands_source": commands_source,
                 "validated_commands": validated_commands,
             },
@@ -158,6 +176,40 @@ class Tester:
             commands.insert(0, ("prisma_validate", "npx prisma validate"))
 
         return commands
+
+        @staticmethod
+        def _failure_detail(
+            result: dict,
+            max_chars: int = 6000,
+        ) -> str:
+            stdout = str(
+                result.get("stdout", "")
+            ).strip()
+
+            stderr = str(
+                result.get("stderr", "")
+            ).strip()
+
+            parts: list[str] = []
+
+            if stdout:
+                parts.append(stdout)
+
+            if stderr and stderr != stdout:
+                parts.append(stderr)
+
+            if not parts:
+                parts.append(
+                    "El comando terminó con código "
+                    f"{result.get('return_code')} "
+                    "sin producir salida."
+                )
+
+            detail = "\n".join(parts)
+
+            # Conserva la parte final, donde normalmente aparecen
+            # el resumen y los errores más relevantes.
+            return detail[-max_chars:]
 
     @staticmethod
     def _uses_prisma(explorer_data: dict) -> bool:
