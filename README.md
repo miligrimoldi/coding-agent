@@ -24,6 +24,8 @@ corriendo build/lint/tests contra el proyecto de verdad.
   output, fuentes recuperadas y qué se observa en cada caso.
 - [`docs/REFLEXION.md`](docs/REFLEXION.md) — qué funcionó, qué falló y qué
   mejoraríamos.
+- - [`docs/OBSERVABILITY.md`](docs/OBSERVABILITY.md) — integración con
+    Langfuse, estructura de las trazas y capturas de las ejecuciones finales.
 
 ## Requisitos
 
@@ -172,4 +174,6 @@ knowledge_base/raw/      Documentos fuente del RAG (versionados)
 target-project/          El repo objetivo sobre el que trabaja el agente
 tests/                   Tests unitarios del harness (sin LLM)
 evidence/                Evidencia de corridas reales
+docs/OBSERVABILITY.md    Uso de Langfuse y capturas de trazas completas
+evidence/langfuse/       Capturas utilizadas como evidencia
 ```
