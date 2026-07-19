@@ -29,6 +29,7 @@ probó y explica qué se observa en cada caso.
 | 2 | `evidence/final/02-service-tests-full-pipeline.txt` | Implementación | `done` | Pipeline completo, memoria, RAG, aprobación humana, retry, tests y Reviewer |
 | 3 | `evidence/final/03-status-dto-tests.txt` | Implementación | `done` | Validación de DTO, recuperación RAG, corrección después de lint y conservación del código productivo |
 | 4 | `evidence/final/04-safe-stop.txt` | Implementación ambigua | `needs_help` | Detención segura, aclaraciones funcionales y ausencia de modificaciones |
+| 5 | `evidence/final/05-web-fallback-fix-verificado.txt` | Análisis sin escrituras | `done` | Corrección de diagnosticabilidad del fallback web (ver nota en corrida 1) |
 
 ## Cobertura de los requisitos
 
@@ -45,7 +46,8 @@ probó y explica qué se observa en cada caso.
 | Cambio de estrategia después de un error | Corridas 2 y 3: lint falla y se reintenta |
 | Detenerse o pedir ayuda | Corrida 4 |
 | No enviar todo el repositorio | Lecturas selectivas registradas en `tool_call_history` |
-| Observabilidad externa | Las cuatro ejecuciones quedaron registradas en Langfuse |
+| Observabilidad externa | Las corridas 1 a 4 quedaron registradas en Langfuse |
+| Diagnosticabilidad del fallback web (búsqueda realizada / resultados recibidos / fuentes usadas) | Corrida 5 |
 
 ---
 
@@ -194,6 +196,21 @@ incorporados en `web_sources`. Por lo tanto, la evidencia técnica finalmente
 retenida provino del repositorio y de los chunks RAG. Esto se documenta de
 forma explícita para no confundir “fallback ejecutado” con “fuente web
 incorporada”.
+
+**Nota posterior:** en ese momento no era posible distinguir, a partir del
+output, *por qué* `web_sources` quedaba vacío pese a `used_web_fallback:
+true`. Investigando esa ambigüedad se encontró que la query que se le
+mandaba a Tavily (armada a partir del pedido más contexto del repositorio)
+podía superar los 400 caracteres, el límite que impone la API de Tavily —
+y la búsqueda fallaba en silencio, sin que el error quedara registrado en
+ningún lado.
+
+Se corrigió ese límite, y además se agregó el campo `web_results_received`
+para separar "se buscó" de "cuántos resultados crudos llegaron" de
+"cuántos pasaron el filtro de dominio oficial" — antes los tres colapsaban
+en un mismo resultado ambiguo. La corrida 5
+(`evidence/final/05-web-fallback-fix-verificado.txt`) documenta el
+comportamiento ya corregido.
 
 ## Qué se observa
 
@@ -682,9 +699,74 @@ cuándo el agente debe detenerse o pedir intervención humana.
 
 ---
 
+# 5. Verificación del fallback web corregido
+
+**Evidencia completa:**
+`evidence/final/05-web-fallback-fix-verificado.txt`
+
+## Por qué existe esta corrida
+
+Corresponde a la corrección del problema descrito en la nota de la
+corrida 1: la query hacia Tavily podía superar su límite de 400 caracteres.
+Esta corrida se hizo específicamente para confirmar que quedó resuelto, con
+una tarea diseñada para necesitar fallback web.
+
+## Pedido ejecutado
+
+> Analizar cómo se podría implementar rate limiting y throttling en los
+> endpoints usando `@nestjs/throttler`, siguiendo las prácticas oficiales
+> recomendadas por NestJS. No modificar archivos.
+
+## Output relevante
+
+```json
+{
+  "status": "done",
+  "files_modified": [],
+  "sources_consulted": ["repository", "rag", "web"],
+  "used_web_fallback": true,
+  "web_results_received": 5,
+  "web_search_error": null,
+  "web_sources": [],
+  "missing_rag_evidence_for": []
+}
+```
+
+El historial de tools confirma que la búsqueda se ejecutó, con la query ya
+recortada a 400 caracteres y el dominio oficial correcto:
+
+```json
+{
+  "tool_name": "web_search",
+  "arguments": {
+    "query": "...399 caracteres...package.json app.module.ts tickets.control",
+    "domains": ["docs.nestjs.com"]
+  },
+  "outcome": "executed"
+}
+```
+
+## Qué se observa
+
+El bug quedó resuelto: la búsqueda corrió y Tavily devolvió resultados
+reales, cinco en este caso (antes la query se rechazaba por longitud y ni
+siquiera llegaba una respuesta válida).
+
+`web_results_received: 5` con `web_sources: []` muestra además el caso que
+motivó agregar ese campo: Tavily encontró 5 páginas relacionadas, pero
+ninguna pasó el filtro de dominio propio del sistema (`_is_allowed_url`,
+más estricto que el `include_domains` que se le pide a la API). Antes de
+esta corrección, este resultado era indistinguible de "Tavily no encontró
+nada" o de "la búsqueda falló" — ahora los tres casos se pueden diferenciar
+mirando `web_results_received` y `web_search_error` juntos.
+
+---
+
 # Conclusión general
 
-Las cuatro corridas muestran comportamientos distintos y complementarios:
+Las primeras cuatro corridas muestran comportamientos distintos y
+complementarios (la quinta se sumó después, para verificar una corrección
+puntual sobre el fallback web):
 
 1. **Análisis sin escrituras:** el pipeline se adapta a la intención y utiliza
    RAG antes del fallback web.
@@ -694,6 +776,10 @@ Las cuatro corridas muestran comportamientos distintos y complementarios:
    productivo y se corrigen problemas de lint.
 4. **Detención segura:** el sistema evita una operación destructiva sin
    requisitos suficientes.
+5. **Fallback web corregido:** la búsqueda web se ejecuta, recibe resultados
+   y queda registrado por qué, en algunos casos, ninguno termina en
+   `web_sources` — sin esa distinción, `web_sources: []` era indistinguible
+   de una búsqueda que nunca llegó a ejecutarse.
 
 Los resultados pueden verificarse mediante:
 

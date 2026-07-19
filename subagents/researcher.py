@@ -302,9 +302,34 @@ Formato:
             "used_web_fallback"
         ] = used_web_fallback
 
+        # Distingue "se intentó la búsqueda web" (used_web_fallback) de
+        # "cuántos resultados devolvió Tavily antes del filtro de
+        # dominio" (web_results_received) de "cuántos quedaron como
+        # fuente final" (len(web_sources), más abajo) -- antes estos tres
+        # estados colapsaban en un único campo que siempre terminaba en
+        # false, sin explicar por qué web_sources podía quedar vacío
+        # pese a haber corrido la búsqueda.
         synthesized_data[
-            "needs_web_fallback"
-        ] = False
+            "web_results_received"
+        ] = web_data.get(
+            "raw_result_count",
+            0,
+        )
+
+        # Si la tool devolvió un error (API key faltante, query
+        # rechazada, timeout, etc.), que quede visible acá en vez de
+        # perderse -- antes web_sources vacío no distinguía "no había
+        # nada que encontrar" de "la búsqueda ni pudo correr".
+        web_search_error = web_data.get("error")
+
+        if web_search_error:
+            synthesized_data[
+                "web_search_error"
+            ] = web_search_error
+
+            task_state.record_observation(
+                f"Búsqueda web falló: {web_search_error}"
+            )
 
         synthesized_data[
             "ecosystems_searched"
@@ -697,6 +722,9 @@ Formato:
             ),
         }
 
+    # Tavily rechaza queries de más de 400 caracteres
+    MAX_WEB_QUERY_LENGTH = 400
+
     def _run_web_fallback(
         self,
         *,
@@ -704,6 +732,8 @@ Formato:
         ecosystems: list[str],
         task_state: TaskState,
     ) -> dict:
+        query = query[: self.MAX_WEB_QUERY_LENGTH]
+
         domains: list[str] = []
 
         for ecosystem in ecosystems:

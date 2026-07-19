@@ -74,6 +74,13 @@ def _execute(
             [],
         )
 
+        # Cuántos resultados devolvió Tavily antes de aplicar nuestro
+        # propio filtro de dominio -- permite distinguir "Tavily no
+        # encontró nada" de "encontró algo pero no era de un dominio
+        # oficial", en vez de que ambos casos colapsen en una lista vacía
+        # sin explicación.
+        raw_result_count = len(raw_results)
+
         results = [
             {
                 "title": item.get(
@@ -103,6 +110,7 @@ def _execute(
             "query": query,
             "domains": domains or [],
             "results": results,
+            "raw_result_count": raw_result_count,
             "response_time": response.get(
                 "response_time"
             ),
